@@ -1,12 +1,12 @@
 import serial, time, re, random
 import pygame
 
-PORT = "/dev/cu.usbserial-1140"
+PORT = "/dev/cu.usbserial-140"
 BAUD = 115200
 DT = 0.3
-THRESH_PITCH = 10
-THRESH_YAW = 15
-COOLDOWN = 2.0
+THRESH_PITCH = 20
+THRESH_YAW = 25
+COOLDOWN = 5.0
 
 # --- 音声ファイルのパス ---
 NOD_SOUNDS = [
