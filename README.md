@@ -1,164 +1,106 @@
-# human-augmentation (Head-Motion Backchannel AI)
+# Head Motion Reaction Relay System
 
-## Overview
-話しながら「頷き / 首振り」をすると、直前の相手の発話（最大8秒）をWhisperで文字起こしし、その内容に応じた自然な相槌を生成・読み上げするシステムです。
-IMU（加速度・ジャイロ）で頭部動作を検出し、肯定 (nod)/否定 (shake)の相槌を分岐します。
+聞き手のメガネ型 IMU による頭部動作（頷き・首振り）を検出し、
+同一ネットワーク内の話し手 PC にリアルタイムで文字表示するシステムです。
 
-## Features
-- 常時録音 + 循環バッファ
-- 直近 BUFFER_SECONDS 秒（デフォルト 8 秒）だけ保持
-- 頭部動作でトリガ
-- nod（頷き）→ 肯定・共感の相槌
-- shake（首振り）→ 否定・違いを穏やかに受け止める相槌
-- OpenAI Whisper + TTS
-  - gpt-4o-transcribe で文字起こし
-  - gpt-4o-mini で相槌生成
-  - gpt-4o-mini-tts でWAV音声生成
-- macOS afplay再生
-- 再生中はバッファを一時停止し、再生後にバッファクリア
+Zoom などのオンライン会議とは独立して動作し、
+非言語的フィードバックを別画面で提示します。
 
-## Requirements
-### OS
-- macOS推奨（afplay を使用しているため）
-- Windows/Linuxの場合は再生部分を変更すれば動作可能
+---
 
-### Hardware
-- マイク入力可能なPC
-- 頭部動作を計測できるIMUデバイス
-- 例: ESP32 + MPU6050 / BNO055 等
-- シリアル接続
-- /dev/cu.usbserial-**** のようなデバイスが見えること
+## システム構成
 
-### Python
-- Python 3.9 以上推奨 (3.13.5では動作確認済み)
+- **聞き手PC**
+  - メガネ型 IMU（シリアル接続）
+  - Python プログラム（頭部動作検出＋送信）
 
-## Installation
-1. リポジトリ取得
-```
-git clone <this-repo>
-cd <this-repo>
-```
+- **中継サーバ**
+  - Node.js + Socket.IO
+  - 聞き手 → 話し手へのイベント中継のみ
 
-2. 仮想環境（任意）
-```python3 -m venv .venv
-source .venv/bin/activate
-```
+- **話し手PC**
+  - ブラウザ（HTMLファイルを開くだけ）
+  - 頭部動作を文字で可視化
 
-3. 依存ライブラリ
-```
-pip install -r requirements.txt
-```
+※ すべて同一 LAN 内で動作します。
 
-Note:
-pyaudio が入らない場合、macOSでは以下が必要なことがあります。
-```
-brew install portaudio
-pip install pyaudio
+---
+
+## 必要環境
+
+### 共通
+- 同一ネットワーク（同一 Wi-Fi / LAN）
+
+### 聞き手PC
+- Python 3.10+
+- IMU デバイス（シリアル通信）
+
+### 中継サーバ用PC
+- Node.js 18+
+
+### 話し手PC
+- Google Chrome 等のモダンブラウザ
+
+---
+
+## セットアップ手順
+
+### 1. 中継サーバの起動
+
+``` bash
+cd imu-relay
+npm install
+node server.js
 ```
 
-## OpenAI API Key 設定
-
-環境変数 OPENAI_API_KEY を設定してください。
+起動後、以下にアクセスできることを確認してください：
 
 ```
-export OPENAI_API_KEY="sk-xxxx..."
+http://<サーバPCのIP>:3000/
 ```
 
-永続化するなら .zshrc / .bashrc に追記。
+'ok'と表示されれば成功です。
 
-## Configuration
+### 2. 話し手PC（表示側）
 
-プログラム冒頭の設定を必要に応じて変更してください。
+1. receiver.html をブラウザで開く
 
-```
-PORT = "/dev/cu.usbserial-140"  # シリアルポート
-BAUD = 115200                   # ボーレート
-DT = 0.3                        # IMUデータ周期想定(秒)
-THRESH_PITCH = 20               # shake判定しきい値
-THRESH_YAW = 25                 # nod判定しきい値
-COOLDOWN = 10.0                 # 連続検出のクールダウン(秒)
+2. 何も操作せず待機（Zoomとは別ウィンドウで使用）
 
-BUFFER_SECONDS = 8              # 直近バッファ秒数
-RATE = 16000                    # 録音サンプリング周波数
-CHUNK = 1024                    # 音声チャンクサイズ
-MIN_SEC = 0.5                   # 最低録音秒数
+※ SERVER_URL の IP がサーバPCの IP になっていることを確認してください。
+
+### 3. 聞き手PC（IMU側）
+``` bash
+pip install pyserial python-socketio
+python main.py
 ```
 
-## Usage
+- IMU が接続されていることを確認
+- 頷き・首振りを行うとイベントが送信されます
 
-まず、ArduinoIDEでsample.inoのプログラムをマイコンに書き込みます。これにより、IMUセンサの計測値がシリアル通信に流れるようになります。
+---
+## 動作確認
 
-その後、以下のようにしてmain.pyを実行します。
+- 聞き手が 頷く  
+→ 話し手画面に「👍 頷き（肯定）」が一瞬表示される
 
-```
-python3 main.py
-```
+- 聞き手が 首を振る  
+→ 話し手画面に「👎 首振り（否定）」が一瞬表示される
 
-起動すると：
-- マイク録音が開始されます
-- IMUのシリアルを読み取り続けます
-- 頭部動作が検出されると、直近の発話に相槌が返ってきます
+---
+## よくあるトラブル
 
-例：
-```
-🎧 話しながら頷く / 首を振ると相槌が返ってきます！
-🟢 NOD detected!
-You said: 今日は研究がすごくうまくいって...
-Backchannel (nod): それは良いですね、順調そうです！
-▶️ Playing...
-```
+- 接続エラーが出る  
+→ SERVER_URL の IP が正しいか確認  
+→ 両PCが同じネットワークか確認  
+→ http://<IP>:3000/ にブラウザでアクセスできるか確認
 
-## IMU データフォーマット
+- 何も表示されない  
+→ ROOM_ID が main.py と receiver.html で一致しているか確認
 
-シリアルで流れてくる1行は、少なくとも6つの数値を含む形式を想定しています。
-```
-ax, ay, az, gx, gy, gz
-```
+---
+## 補足
 
-例（どんな区切りでもOK。正規表現で数値だけ抜き出します）：
-```
-0.01, -0.02, 1.00, 0.1, 0.5, -0.3
-```
-
-gy を pitch（shake検出用）
-
-gz を yaw（nod検出用）
-
-として積分・減衰して判定しています。
-
-## Troubleshooting
-1. PORT が違う / シリアルが開けない
-
-接続中のポートを確認：
-
-```
-ls /dev/cu.*
-```
-
-表示されたものを PORT に設定してください。
-
-2. 反応が多すぎる / 少なすぎる
-
-THRESH_PITCH, THRESH_YAW を調整
-
-DT が実際のIMU送信周期とズレていると誤検出します
-→ IMU側の送信周期に合わせて変更してください。
-
-3. 相槌が「空」になる
-
-発話が短すぎる可能性
-→ MIN_SEC を下げる / BUFFER_SECONDS を増やす
-
-Whisperで無音判定されている可能性
-→ マイク入力レベルを確認
-
-4. afplay が無い
-
-play_audio() を別の再生方法へ変更してください。
-
-## Notes / Safety
-
-本システムはリアルタイム音声を外部APIへ送信します。
-録音や利用環境のプライバシーに注意して使用してください。
-
-IMUの装着位置や座標系によって検出方向が反転する場合があります。
+- Zoom 等の会議ソフトとは完全に独立しています
+- 音声・映像通信は行いません
+- 研究・プロトタイピング用途を想定しています
