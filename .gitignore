@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# Build
+build/
+dist/
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Audio outputs
+*.wav
+*.mp3
+
+# Data outputs
+backchannel/
+data/backchannel/
+data/tts_cache/
+
+# UV
+.uv/
+
+# AGENTS
+AGENTS.md
+
+# Env
+.env

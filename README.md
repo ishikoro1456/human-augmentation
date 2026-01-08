@@ -1,106 +1,32 @@
-# Head Motion Reaction Relay System
+# Human Augmentation
 
-聞き手のメガネ型 IMU による頭部動作（頷き・首振り）を検出し、
-同一ネットワーク内の話し手 PC にリアルタイムで文字表示するシステムです。
+ローカルで相槌を返す試作です。IMU の反応が来たときに、直近の発話と IMU の情報を使って相槌を選び、音声を再生します。
 
-Zoom などのオンライン会議とは独立して動作し、
-非言語的フィードバックを別画面で提示します。
+## 前提
 
----
+- `data/catalog.tsv` に相槌の一覧があること
+- `data/backchannel/` に音声ファイルがあること
+- 環境変数 `OPENAI_API_KEY` を設定していること
 
-## システム構成
-
-- **聞き手PC**
-  - メガネ型 IMU（シリアル接続）
-  - Python プログラム（頭部動作検出＋送信）
-
-- **中継サーバ**
-  - Node.js + Socket.IO
-  - 聞き手 → 話し手へのイベント中継のみ
-
-- **話し手PC**
-  - ブラウザ（HTMLファイルを開くだけ）
-  - 頭部動作を文字で可視化
-
-※ すべて同一 LAN 内で動作します。
-
----
-
-## 必要環境
-
-### 共通
-- 同一ネットワーク（同一 Wi-Fi / LAN）
-
-### 聞き手PC
-- Python 3.10+
-- IMU デバイス（シリアル通信）
-
-### 中継サーバ用PC
-- Node.js 18+
-
-### 話し手PC
-- Google Chrome 等のモダンブラウザ
-
----
-
-## セットアップ手順
-
-### 1. 中継サーバの起動
-
-``` bash
-cd imu-relay
-npm install
-node server.js
-```
-
-起動後、以下にアクセスできることを確認してください：
+## 起動
 
 ```
-http://<サーバPCのIP>:3000/
+uv sync
+uv run app/cli/run.py --port /dev/cu.usbserial-140 --baud 115200 --transcript transcribe.txt
 ```
 
-'ok'と表示されれば成功です。
+`transcribe.txt` は OpenAI の TTS で順に読み上げます。IMU の反応が来ると、その時点までに読み上げた全文を LLM に渡します。([platform.openai.com](https://platform.openai.com/docs/guides/text-to-speech?utm_source=openai))
 
-### 2. 話し手PC（表示側）
+TTS の音声は `data/tts_cache/` に保存します。次回以降は再生成しません。
 
-1. receiver.html をブラウザで開く
+文字起こしの内容を確認したい場合は次を付けます。
 
-2. 何も操作せず待機（Zoomとは別ウィンドウで使用）
-
-※ SERVER_URL の IP がサーバPCの IP になっていることを確認してください。
-
-### 3. 聞き手PC（IMU側）
-``` bash
-pip install pyserial python-socketio
-python main.py
+```
+uv run app/cli/run.py --debug-transcript
 ```
 
-- IMU が接続されていることを確認
-- 頷き・首振りを行うとイベントが送信されます
+IMU と選択理由を確認したい場合は次を付けます。
 
----
-## 動作確認
-
-- 聞き手が 頷く  
-→ 話し手画面に「👍 頷き（肯定）」が一瞬表示される
-
-- 聞き手が 首を振る  
-→ 話し手画面に「👎 首振り（否定）」が一瞬表示される
-
----
-## よくあるトラブル
-
-- 接続エラーが出る  
-→ SERVER_URL の IP が正しいか確認  
-→ 両PCが同じネットワークか確認  
-→ http://<IP>:3000/ にブラウザでアクセスできるか確認
-
-- 何も表示されない  
-→ ROOM_ID が main.py と receiver.html で一致しているか確認
-
----
-## 補足
-
-- Zoom 等の会議ソフトとは完全に独立しています
-- 音声・映像通信は行いません
-- 研究・プロトタイピング用途を想定しています
+```
+uv run app/cli/run.py --debug-agent
+```

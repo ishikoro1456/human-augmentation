@@ -1,0 +1,14 @@
+[project]
+name = "human-augmentation"
+version = "0.1.0"
+description = "Local backchannel app prototype"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "google-cloud-texttospeech",
+  "langgraph",
+  "openai",
+  "pygame",
+  "pyserial",
+  "python-dotenv",
+]
