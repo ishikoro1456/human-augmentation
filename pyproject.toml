@@ -11,4 +11,5 @@ dependencies = [
   "pygame",
   "pyserial",
   "python-dotenv",
+  "rich",
 ]

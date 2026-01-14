@@ -1,5 +1,5 @@
 import time
-from typing import Iterator
+from typing import Callable, Iterator
 
 import serial
 from serial import SerialException
@@ -7,12 +7,23 @@ from serial import SerialException
 from .parser import parse_imu_line, ImuTuple
 
 
-def read_imu_lines(port: str, baud: int) -> Iterator[ImuTuple]:
+def read_imu_lines(
+    port: str,
+    baud: int,
+    *,
+    on_log: Callable[[str], None] | None = None,
+) -> Iterator[ImuTuple]:
+    def _log(message: str) -> None:
+        if on_log:
+            on_log(message)
+        else:
+            print(message)
+
     while True:
         try:
             ser = serial.Serial(port, baud, timeout=1)
         except (FileNotFoundError, SerialException):
-            print(f"IMUポートが見つかりません: {port}")
+            _log(f"IMUポートが見つかりません: {port}")
             time.sleep(2)
             continue
 
@@ -25,7 +36,7 @@ def read_imu_lines(port: str, baud: int) -> Iterator[ImuTuple]:
                 yield parsed
                 time.sleep(0)
         except SerialException:
-            print("IMUの接続が切れました。再接続を待ちます。")
+            _log("IMUの接続が切れました。再接続を待ちます。")
             time.sleep(2)
         finally:
             try:
