@@ -27,6 +27,38 @@ from app.transcript.speaker import TranscriptSpeaker
 from app.transcript.timeline import TranscriptTimeline
 
 
+def _extract_agent_reason(result: Dict[str, object]) -> str:
+    """エージェントの結果からreasonを抽出する（二段判断対応）"""
+    selection = result.get("selection", {})
+    if not isinstance(selection, dict):
+        return ""
+
+    # 新形式: reason_short + decision_checks
+    reason_short = selection.get("reason_short", "")
+    decision_reason = selection.get("decision_reason", "")
+    decision_checks = selection.get("decision_checks", {})
+
+    # 旧形式との互換性: reason
+    old_reason = selection.get("reason", "")
+
+    if reason_short or decision_reason:
+        # 新形式
+        parts = []
+        if decision_reason:
+            parts.append(str(decision_reason))
+        if reason_short and reason_short != decision_reason:
+            parts.append(str(reason_short))
+        if isinstance(decision_checks, dict):
+            false_checks = [k.replace("_", " ") for k, v in decision_checks.items() if v is False]
+            if false_checks:
+                parts.append(f"NG: {', '.join(false_checks[:3])}")
+        return " / ".join(parts) if parts else ""
+    elif old_reason:
+        # 旧形式
+        return str(old_reason)
+    return ""
+
+
 def imu_loop(
     port: str,
     baud: int,
@@ -321,10 +353,7 @@ def backchannel_loop_on_signal(
             last_agent_call = time.time()
 
             selected_id = str(result.get("selected_id", ""))
-            selection = result.get("selection", {})
-            reason = ""
-            if isinstance(selection, dict):
-                reason = str(selection.get("reason", ""))
+            reason = _extract_agent_reason(result)
 
             if selected_id == "NONE":
                 if status:
@@ -337,7 +366,7 @@ def backchannel_loop_on_signal(
                         ts=time.time(),
                     )
                 if debug_agent and not status:
-                    _emit("選択: NONE")
+                    _emit(f"選択: NONE ({reason})" if reason else "選択: NONE")
                 pending = None
                 continue
 
@@ -563,35 +592,13 @@ def run_session(
     speaker.start()
 
     if require_human_signal:
-        emit("文字起こしの読み上げを開始しました。相槌はIMUサインのタイミングで判断します。")
+        emit("文字起こしの読み上げを開始しました。相槌は区切れ＋IMUエピソードで判断します。")
     else:
         emit("文字起こしの読み上げを開始しました。相槌はチャンク境界(読み上げ直後)で判断します。")
 
-    if require_human_signal:
-        threading.Thread(
-            target=backchannel_loop_on_signal,
-            args=(signal_events,),
-            kwargs={
-                "graph": graph,
-                "items": items,
-                "audio_dir": audio_dir,
-                "imu_buffer": imu_buffer,
-                "imu_calibration": imu_calibration,
-                "gesture_calib": gesture_calib,
-                "imu_nod_axis": imu_nod_axis_effective,
-                "imu_shake_axis": imu_shake_axis_effective,
-                "imu_tilt_axis": imu_tilt_axis_effective,
-                "speaker": speaker,
-                "player": player,
-                "thread_id": thread_id,
-                "agent_interval_sec": agent_interval_sec,
-                "backchannel_cooldown_sec": backchannel_cooldown_sec,
-                "human_signal_hold_sec": human_signal_hold_sec,
-                "debug_agent": debug_agent,
-                "status": status,
-            },
-            daemon=True,
-        ).start()
+    # require_human_signal でも区切れベースで判断する（backchannel_loop_on_signal は使わない）
+    recent_ids: list[str] = []
+    recent_texts: list[str] = []
 
     while True:
         event = transcript_events.get()
@@ -616,21 +623,6 @@ def run_session(
             continue
 
         try:
-            if require_human_signal:
-                now = time.time()
-                transcript_context = speaker.get_spoken_context()
-
-                if debug_transcript and not status:
-                    print(f"文字起こし(直後): [{seg.t_sec:04d}s] {seg.text}")
-                    print("文字起こしコンテクスト:")
-                    print(transcript_context)
-
-                if status:
-                    status.set_transcript_boundary(t_sec=seg.t_sec, text=seg.text, ts=now)
-                else:
-                    emit(f"区切り: [{seg.t_sec:04d}s] {seg.text}")
-                continue
-
             now = time.time()
             transcript_context = speaker.get_spoken_context()
 
@@ -645,6 +637,34 @@ def run_session(
                 emit(f"判断点: [{seg.t_sec:04d}s] {seg.text}")
             if debug_agent:
                 emit(f"IMU: {imu_buffer.format_status_line(now=now)}")
+
+            # エピソードベースの判断（require_human_signal のとき）
+            episode_summary: Dict[str, object] = {}
+            if require_human_signal:
+                episodes = signal_store.consume_episodes(
+                    max_age_s=human_signal_hold_sec,
+                    now=now,
+                )
+                episode_summary = signal_store.summarize_episodes(episodes)
+                if debug_signal or debug_agent:
+                    ep_count = episode_summary.get("count", 0)
+                    best_score = episode_summary.get("best_nod_score", 0)
+                    emit(f"エピソード: {ep_count}件, best_nod_score={best_score}")
+
+                if episode_summary.get("count", 0) == 0:
+                    # エピソードがない場合はスキップ
+                    if status:
+                        status.clear_backchannel_playback()
+                        status.set_agent_decision(
+                            choice_id="NONE",
+                            choice_text="",
+                            reason="区切れまでにIMUエピソードがありませんでした。",
+                            latency_ms=0,
+                            ts=time.time(),
+                        )
+                    if debug_signal or debug_agent:
+                        emit("選択: NONE (エピソードなし)")
+                    continue
 
             if now - last_backchannel_play < backchannel_cooldown_sec:
                 if debug_signal or debug_agent:
@@ -755,31 +775,40 @@ def run_session(
                             "norm_0to1": round(norm, 3),
                             "level_1to5": level,
                         }
-            if require_human_signal and not bool(human_signal.get("present", False)):
-                reason = f"IMUの相槌サインがないので返しません({human_signal.get('reason', '')})"
-                if status:
-                    status.clear_backchannel_playback()
-                    status.set_agent_decision(
-                        choice_id="NONE",
-                        choice_text="",
-                        reason=reason,
-                        latency_ms=0,
-                        ts=time.time(),
-                    )
-                if debug_signal or debug_agent:
-                    emit("選択: NONE")
-                continue
+            # require_human_signal: true の場合はエピソードで既にチェック済み
+            # require_human_signal: false の場合でも、present なら返す（従来互換）
+            # エピソードの情報を imu_bundle に追加
+            if require_human_signal and episode_summary:
+                imu_bundle["episode_summary"] = episode_summary
+                # エピソードのベストシグナルを human_signal として使う
+                best_signal = episode_summary.get("best_signal")
+                if isinstance(best_signal, dict) and best_signal:
+                    human_signal = dict(best_signal)
+                    human_signal["present"] = True
+                    human_signal["from_episode"] = True
+                    imu_bundle["human_signal"] = human_signal
             audio_state: Dict[str, object] = {
                 "transcript_playing": player.is_music_playing(),
                 "backchannel_playing": player.is_effect_playing(),
-                "decision_point": "after_transcript_chunk",
+                "decision_point": "on_boundary" if require_human_signal else "after_transcript_chunk",
             }
             recent_backchannel: Dict[str, object] = {
                 "seconds_ago": None
                 if last_backchannel_play == 0.0
                 else round(now - last_backchannel_play, 3),
                 "text": last_backchannel_text,
+                "history_ids": recent_ids[-6:],
+                "history_texts": recent_texts[-6:],
             }
+
+            # directory_allowlist をエピソードのヒントに基づいて設定
+            directory_allowlist: list[str] = []
+            if require_human_signal and episode_summary:
+                if episode_summary.get("has_nod"):
+                    directory_allowlist = ["understanding", "agreement"]
+                elif episode_summary.get("has_shake"):
+                    directory_allowlist = ["question", "disagreement"]
+            avoid_ids = recent_ids[-2:] if recent_ids else []
 
             t0 = time.time()
             result = graph.invoke(
@@ -791,6 +820,8 @@ def run_session(
                     "recent_backchannel": recent_backchannel,
                     "utterance_t_sec": seg.t_sec,
                     "transcript_context": transcript_context,
+                    "directory_allowlist": directory_allowlist,
+                    "avoid_ids": avoid_ids,
                     "candidates": [],
                     "selection": {},
                     "selected_id": "",
@@ -802,10 +833,7 @@ def run_session(
             last_agent_call = time.time()
 
             selected_id = str(result.get("selected_id", ""))
-            selection = result.get("selection", {})
-            reason = ""
-            if isinstance(selection, dict):
-                reason = str(selection.get("reason", ""))
+            reason = _extract_agent_reason(result)
 
             if selected_id == "NONE":
                 if status:
@@ -818,9 +846,7 @@ def run_session(
                         ts=time.time(),
                     )
                 if debug_agent:
-                    if reason:
-                        emit(f"理由: {reason}")
-                    emit("選択: NONE")
+                    emit(f"選択: NONE ({reason})" if reason else "選択: NONE")
                 continue
 
             selected_item = next((item for item in items if item.id == selected_id), None)
@@ -862,6 +888,12 @@ def run_session(
                 emit(f"再生: {audio_path}")
             last_backchannel_play = time.time()
             last_backchannel_text = selected_item.text
+            recent_ids.append(selected_item.id)
+            recent_texts.append(selected_item.text)
+            if len(recent_ids) > 12:
+                recent_ids = recent_ids[-12:]
+            if len(recent_texts) > 12:
+                recent_texts = recent_texts[-12:]
             while player.is_effect_playing():
                 time.sleep(0.02)
         except Exception as exc:

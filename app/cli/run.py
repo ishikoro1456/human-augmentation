@@ -28,7 +28,7 @@ def main() -> None:
         default="data/backchannel",
         help="Directory that holds audio files",
     )
-    parser.add_argument("--port", default="/dev/cu.usbserial-140")
+    parser.add_argument("--port", default="/dev/cu.usbserial-310")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--thread-id", default="local-session")
     parser.add_argument(
