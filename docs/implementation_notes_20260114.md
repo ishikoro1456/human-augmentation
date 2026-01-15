@@ -54,6 +54,28 @@ prepare → decide → [should_respond=true] → choose → resolve
 
 `--gesture-calibration` オプションで、頷き・首振りの軸を自動推定。これにより、頷きを首振りと誤判定する問題が改善。
 
+### 6. IMU閾値到達でトリガー（2026-01-15追加）
+
+以前の問題：
+- 1回のエピソードでもLLMを呼んでしまい、過剰に反応していた
+- transcribe.txt の2分ごとの区切りがトリガーで、リアルタイム向きではなかった
+
+変更後：
+- 同じジェスチャー（nod/shake）が `min_gesture_count` 回（デフォルト3回）以上になった**瞬間に**LLMを呼ぶ
+- transcribe.txt の区切りは無関係（コンテクスト提供のみ）
+- 発火後は自動でリセットされ、再度3回溜まるまで発火しない
+
+```
+--min-gesture-count 3   # 3回以上で反応（デフォルト）
+--min-gesture-count 2   # 2回以上で反応（敏感にしたい場合）
+```
+
+**追加した関数**（signal_store.py）:
+- `count_by_gesture()`: ジェスチャーごとの発生回数をカウント
+- `get_dominant_gesture()`: 最も多いジェスチャーを返す（閾値以上のみ）
+- `set_threshold_callback()`: 閾値到達時のコールバックを設定
+- `reset_threshold()`: 発火フラグをリセット
+
 ---
 
 ## 試したが戻したもの
@@ -141,6 +163,9 @@ uv run python app/cli/run.py --ui --debug-agent --debug-signal --gesture-calibra
 
 # キャリブレーションなし（素早く起動）
 uv run python app/cli/run.py --ui --debug-agent --calibration-still-sec 0 --calibration-active-sec 0
+
+# 敏感度を変更（2回でトリガー）
+uv run python app/cli/run.py --ui --debug-agent --debug-signal --gesture-calibration --min-gesture-count 2
 ```
 
 ---

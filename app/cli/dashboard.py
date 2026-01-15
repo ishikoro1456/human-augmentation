@@ -104,14 +104,14 @@ def _render(status: SessionStatus):
     agent_table.add_row("transcript", _fold(str(tr) if tr else "-"))
     decision_panel = Panel(agent_table, title="Decision", border_style="green")
 
-    logs = status.logs[-10:] if status.logs else []
+    logs = status.logs[-20:] if status.logs else []
     log_text = Text("\n".join(logs) if logs else "（ログなし）", overflow="fold", no_wrap=False)
     log_panel = Panel(log_text, title="Log", border_style="white")
 
     layout = Layout()
     layout.split_column(
         Layout(name="body", ratio=1),
-        Layout(name="log", size=12),
+        Layout(name="log", size=24),
     )
     layout["body"].split_row(
         Layout(name="transcript", ratio=2),

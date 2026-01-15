@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 from app.runtime.session import run_session
 from app.runtime.status import StatusStore
 
-
+    
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Local backchannel agent")
@@ -222,6 +222,12 @@ def main() -> None:
         default="gx",
         help="Which gyro axis represents a head-tilt-like motion for this sensor mounting",
     )
+    parser.add_argument(
+        "--min-gesture-count",
+        type=int,
+        default=3,
+        help="Minimum number of consecutive same-gesture episodes before triggering LLM call",
+    )
     args = parser.parse_args()
 
     status = StatusStore() if args.ui else None
@@ -271,6 +277,7 @@ def main() -> None:
         gesture_rest_sec=args.gesture_rest_sec,
         auto_imu_axis_map=not args.no_auto_imu_axis_map,
         startup_wait_sec=args.startup_wait_sec,
+        min_gesture_count=args.min_gesture_count,
     )
 
 

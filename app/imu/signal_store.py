@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,62 @@ class HumanSignalStore:
         self._current_episode_peak_signal: Dict[str, object] = {}
         self._current_episode_peak_mag: float = 0.0
 
+        # 閾値監視
+        self._threshold_min_count: int = 3
+        self._threshold_max_age_s: float = 5.0
+        self._threshold_callback: Optional[Callable[[str, Dict[str, int]], None]] = None
+        self._threshold_fired: bool = False  # 発火済みフラグ（リセットまで再発火しない）
+
+    def set_threshold_callback(
+        self,
+        callback: Callable[[str, Dict[str, int]], None],
+        min_count: int = 3,
+        max_age_s: float = 5.0,
+    ) -> None:
+        """
+        閾値到達時に呼ばれるコールバックを設定
+        
+        Args:
+            callback: コールバック関数 (dominant_gesture, counts) を受け取る
+            min_count: 発火に必要な同一ジェスチャーの最小回数
+            max_age_s: エピソードの有効期間（秒）
+        """
+        with self._lock:
+            self._threshold_callback = callback
+            self._threshold_min_count = min_count
+            self._threshold_max_age_s = max_age_s
+            self._threshold_fired = False
+
+    def reset_threshold(self) -> None:
+        """閾値の発火フラグをリセットし、再度発火可能にする"""
+        with self._lock:
+            self._threshold_fired = False
+
+    def _check_and_fire_threshold(self, now: float) -> None:
+        """閾値をチェックし、条件を満たしたらコールバックを呼ぶ（ロック外で呼ぶ）"""
+        if self._threshold_callback is None:
+            return
+        if self._threshold_fired:
+            return
+
+        counts = self.count_by_gesture(max_age_s=self._threshold_max_age_s, now=now)
+        relevant = {k: v for k, v in counts.items() if k != "other" and v >= self._threshold_min_count}
+        if not relevant:
+            return
+
+        dominant = max(relevant, key=lambda k: relevant[k])
+        
+        # 発火フラグを立ててからコールバック
+        with self._lock:
+            if self._threshold_fired:
+                return
+            self._threshold_fired = True
+        
+        # ロック外でコールバックを呼ぶ
+        self._threshold_callback(dominant, counts)
+
     def update(self, *, ts: float, signal: Dict[str, object]) -> None:
+        episode_finalized = False
         with self._lock:
             self._updated_at = float(ts)
             self._latest = dict(signal) if signal else {}
@@ -90,6 +145,11 @@ class HumanSignalStore:
                 # present: false になった → エピソードの終了
                 if self._current_episode_start is not None:
                     self._finalize_current_episode(ts)
+                    episode_finalized = True
+
+        # エピソードが確定したら閾値をチェック（ロック外）
+        if episode_finalized:
+            self._check_and_fire_threshold(ts)
 
     def _finalize_current_episode(self, end_ts: float) -> None:
         """現在のエピソードを確定してリストに追加（ロック内で呼ぶ）"""
@@ -239,6 +299,51 @@ class HumanSignalStore:
                     self._current_episode_peak_mag = 0.0
 
             return consumed
+
+    def count_by_gesture(
+        self,
+        *,
+        max_age_s: Optional[float] = None,
+        now: Optional[float] = None,
+    ) -> Dict[str, int]:
+        """
+        ジェスチャーごとのエピソード数をカウントする
+        
+        Returns:
+            {"nod": 2, "shake": 1, "other": 0, "tilt": 0}
+        """
+        episodes = self.get_episodes(max_age_s=max_age_s, now=now, include_current=True)
+        counts: Dict[str, int] = {"nod": 0, "shake": 0, "tilt": 0, "other": 0}
+        for ep in episodes:
+            hint = ep.gesture_hint
+            if hint in counts:
+                counts[hint] += 1
+            else:
+                counts["other"] += 1
+        return counts
+
+    def get_dominant_gesture(
+        self,
+        *,
+        max_age_s: Optional[float] = None,
+        now: Optional[float] = None,
+        min_count: int = 1,
+    ) -> Optional[str]:
+        """
+        最も多いジェスチャーを返す
+        
+        Args:
+            min_count: この回数以上ないとNoneを返す
+        
+        Returns:
+            "nod", "shake", "tilt", または None
+        """
+        counts = self.count_by_gesture(max_age_s=max_age_s, now=now)
+        # other は除外
+        relevant = {k: v for k, v in counts.items() if k != "other" and v >= min_count}
+        if not relevant:
+            return None
+        return max(relevant, key=lambda k: relevant[k])
 
     def summarize_episodes(
         self,

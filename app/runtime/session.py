@@ -444,6 +444,7 @@ def run_session(
     gesture_rest_sec: float = 1.0,
     auto_imu_axis_map: bool = True,
     startup_wait_sec: float = 0.0,
+    min_gesture_count: int = 3,
 ) -> None:
     def emit(message: str) -> None:
         if status:
@@ -571,107 +572,158 @@ def run_session(
     speaker.start()
 
     if require_human_signal:
-        emit("文字起こしの読み上げを開始しました。相槌は区切れ＋IMUエピソードで判断します。")
+        emit("文字起こしの読み上げを開始しました。相槌はIMU閾値到達（3回以上）で判断します。")
     else:
         emit("文字起こしの読み上げを開始しました。相槌はチャンク境界(読み上げ直後)で判断します。")
 
-    # require_human_signal でも区切れベースで判断する（backchannel_loop_on_signal は使わない）
     recent_ids: list[str] = []
     recent_texts: list[str] = []
 
-    while True:
-        event = transcript_events.get()
-        if event.kind == "segment_start":
-            if debug_transcript and event.segment and not status:
-                print(f"文字起こし(再生中): [{event.segment.t_sec:04d}s] {event.segment.text}")
-            continue
-        if event.kind == "error":
-            if event.error:
-                emit(event.error)
-            continue
-        if event.kind == "done":
-            emit("文字起こしの読み上げが終わりました。")
-            signal_events.put({"kind": "stop"})
-            return
-        if event.kind != "segment_end":
+    # IMU閾値到達イベント用のキュー
+    imu_trigger_queue: queue.Queue = queue.Queue()
+    last_transcript_text: str = ""
+    last_transcript_t_sec: int = 0
+    last_count_display: float = 0.0
+
+    def on_imu_threshold_reached(gesture: str, counts: Dict[str, int]) -> None:
+        """IMU閾値に達したときのコールバック"""
+        imu_trigger_queue.put({"gesture": gesture, "counts": counts, "ts": time.time()})
+
+    # 閾値監視を設定（有効期間は長めに30秒）
+    gesture_accumulation_sec = 30.0
+    if require_human_signal:
+        signal_store.set_threshold_callback(
+            on_imu_threshold_reached,
+            min_count=min_gesture_count,
+            max_age_s=gesture_accumulation_sec,
+        )
+
+    transcript_done = False
+
+    while not transcript_done:
+        # transcript_events を処理（コンテクスト更新用）
+        try:
+            event = transcript_events.get(timeout=0.05)
+            if event.kind == "segment_start":
+                if debug_transcript and event.segment and not status:
+                    print(f"文字起こし(再生中): [{event.segment.t_sec:04d}s] {event.segment.text}")
+            elif event.kind == "error":
+                if event.error:
+                    emit(event.error)
+            elif event.kind == "done":
+                emit("文字起こしの読み上げが終わりました。")
+                signal_events.put({"kind": "stop"})
+                transcript_done = True
+            elif event.kind == "segment_end":
+                seg = event.segment
+                resume = event.resume
+                if seg is not None:
+                    last_transcript_text = seg.text
+                    last_transcript_t_sec = seg.t_sec
+                    if status:
+                        status.set_transcript_boundary(t_sec=seg.t_sec, text=seg.text, ts=time.time())
+                    if debug_transcript and not status:
+                        print(f"文字起こし(直後): [{seg.t_sec:04d}s] {seg.text}")
+                # segment_end で止まっている再生を即座に再開（IMUトリガー待ちで止まらないように）
+                if resume is not None:
+                    resume.set()
+                    # require_human_signal: false の場合はここでLLM呼び出し
+                    if not require_human_signal:
+                        imu_trigger_queue.put({
+                            "gesture": "segment_end",
+                            "counts": {},
+                            "ts": time.time(),
+                            "force": True,
+                        })
+        except queue.Empty:
+            pass
+
+        # 定期的にカウントを表示（1秒ごと）
+        now_for_count = time.time()
+        if require_human_signal and (debug_signal or debug_agent) and (now_for_count - last_count_display) >= 1.0:
+            gesture_counts = signal_store.count_by_gesture(
+                max_age_s=gesture_accumulation_sec,
+                now=now_for_count,
+            )
+            total = sum(gesture_counts.values())
+            if total > 0:
+                emit(f"現在のカウント: {gesture_counts} (閾値: {min_gesture_count})")
+            last_count_display = now_for_count
+
+        # IMUトリガーを処理
+        try:
+            imu_event = imu_trigger_queue.get_nowait()
+        except queue.Empty:
             continue
 
-        seg = event.segment
-        resume = event.resume
-        if seg is None or resume is None:
+        # IMU閾値に達した！LLMを呼び出す
+        dominant_gesture = imu_event.get("gesture", "")
+        gesture_counts = imu_event.get("counts", {})
+        is_forced = imu_event.get("force", False)
+
+        now = time.time()
+        transcript_context = speaker.get_spoken_context()
+
+        if debug_signal or debug_agent:
+            if is_forced:
+                emit(f"トリガー: segment_end")
+            else:
+                emit(f"トリガー: IMU閾値到達 {dominant_gesture} (カウント: {gesture_counts})")
+
+        if debug_agent:
+            emit(f"IMU: {imu_buffer.format_status_line(now=now)}")
+
+        # エピソードを消費してリセット
+        episode_summary: Dict[str, object] = {}
+        if require_human_signal and not is_forced:
+            episodes = signal_store.consume_episodes(
+                max_age_s=gesture_accumulation_sec,
+                now=now,
+            )
+            episode_summary = signal_store.summarize_episodes(episodes)
+            episode_summary["dominant_gesture"] = dominant_gesture
+            if debug_signal or debug_agent:
+                ep_count = episode_summary.get("count", 0)
+                best_score = episode_summary.get("best_nod_score", 0)
+                emit(f"エピソード: {ep_count}件, best_nod_score={best_score}, 判定: {dominant_gesture}")
+            # 閾値フラグをリセット（次の発火を許可）
+            signal_store.reset_threshold()
+
+        if now - last_backchannel_play < backchannel_cooldown_sec:
+            if debug_signal or debug_agent:
+                emit("スキップ: クールダウン中")
+            if status:
+                status.clear_backchannel_playback()
+                status.set_agent_decision(
+                    choice_id="NONE",
+                    choice_text="",
+                    reason="直近に相槌を出したのでクールダウンします。",
+                    latency_ms=0,
+                    ts=time.time(),
+                )
+            # 閾値リセット（再度発火可能にする）
+            if require_human_signal:
+                signal_store.reset_threshold()
+            continue
+
+        if now - last_agent_call < agent_interval_sec:
+            if debug_signal or debug_agent:
+                emit("スキップ: 間隔制限")
+            if status:
+                status.clear_backchannel_playback()
+                status.set_agent_decision(
+                    choice_id="NONE",
+                    choice_text="",
+                    reason="エージェント呼び出し間隔を守るため今回は返しません。",
+                    latency_ms=0,
+                    ts=time.time(),
+                )
+            # 閾値リセット（再度発火可能にする）
+            if require_human_signal:
+                signal_store.reset_threshold()
             continue
 
         try:
-            now = time.time()
-            transcript_context = speaker.get_spoken_context()
-
-            if debug_transcript and not status:
-                print(f"文字起こし(直後): [{seg.t_sec:04d}s] {seg.text}")
-                print("文字起こしコンテクスト:")
-                print(transcript_context)
-
-            if status:
-                status.set_transcript_boundary(t_sec=seg.t_sec, text=seg.text, ts=now)
-            else:
-                emit(f"判断点: [{seg.t_sec:04d}s] {seg.text}")
-            if debug_agent:
-                emit(f"IMU: {imu_buffer.format_status_line(now=now)}")
-
-            # エピソードベースの判断（require_human_signal のとき）
-            episode_summary: Dict[str, object] = {}
-            if require_human_signal:
-                episodes = signal_store.consume_episodes(
-                    max_age_s=human_signal_hold_sec,
-                    now=now,
-                )
-                episode_summary = signal_store.summarize_episodes(episodes)
-                if debug_signal or debug_agent:
-                    ep_count = episode_summary.get("count", 0)
-                    best_score = episode_summary.get("best_nod_score", 0)
-                    emit(f"エピソード: {ep_count}件, best_nod_score={best_score}")
-
-                if episode_summary.get("count", 0) == 0:
-                    # エピソードがない場合はスキップ
-                    if status:
-                        status.clear_backchannel_playback()
-                        status.set_agent_decision(
-                            choice_id="NONE",
-                            choice_text="",
-                            reason="区切れまでにIMUエピソードがありませんでした。",
-                            latency_ms=0,
-                            ts=time.time(),
-                        )
-                    if debug_signal or debug_agent:
-                        emit("選択: NONE (エピソードなし)")
-                    continue
-
-            if now - last_backchannel_play < backchannel_cooldown_sec:
-                if debug_signal or debug_agent:
-                    emit("スキップ: クールダウン中")
-                if status:
-                    status.clear_backchannel_playback()
-                    status.set_agent_decision(
-                        choice_id="NONE",
-                        choice_text="",
-                        reason="直近に相槌を出したのでクールダウンします。",
-                        latency_ms=0,
-                        ts=time.time(),
-                    )
-                continue
-
-            if now - last_agent_call < agent_interval_sec:
-                if debug_signal or debug_agent:
-                    emit("スキップ: 間隔制限")
-                if status:
-                    status.clear_backchannel_playback()
-                    status.set_agent_decision(
-                        choice_id="NONE",
-                        choice_text="",
-                        reason="エージェント呼び出し間隔を守るため今回は返しません。",
-                        latency_ms=0,
-                        ts=time.time(),
-                    )
-                continue
 
             imu_bundle = imu_buffer.build_bundle(
                 now=now,
@@ -792,12 +844,12 @@ def run_session(
             t0 = time.time()
             result = graph.invoke(
                 {
-                    "utterance": seg.text,
+                    "utterance": last_transcript_text,
                     "imu": imu_bundle,
                     "imu_text": json.dumps(imu_bundle, ensure_ascii=False),
                     "audio_state": audio_state,
                     "recent_backchannel": recent_backchannel,
-                    "utterance_t_sec": seg.t_sec,
+                    "utterance_t_sec": last_transcript_t_sec,
                     "transcript_context": transcript_context,
                     "directory_allowlist": directory_allowlist,
                     "avoid_ids": avoid_ids,
@@ -885,5 +937,3 @@ def run_session(
                     latency_ms=0,
                     ts=time.time(),
                 )
-        finally:
-            resume.set()
