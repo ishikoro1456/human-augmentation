@@ -42,54 +42,20 @@ def _build_candidates(
 
 
 def _build_decide_schema() -> Dict[str, object]:
-    """第一段：返すかどうかを判断するためのスキーマ"""
+    """第一段：返すかどうかを判断するためのスキーマ（シンプル版）"""
     return {
         "type": "object",
         "properties": {
             "should_respond": {
                 "type": "boolean",
-                "description": "相槌を返すべきかどうか。迷ったらfalse。",
+                "description": "相槌を返すべきかどうか",
             },
-            "checks": {
-                "type": "object",
-                "description": "判断の根拠となるチェック項目",
-                "properties": {
-                    "motion_has_oscillation": {
-                        "type": "boolean",
-                        "description": "往復運動があるか（符号変化が1回以上）",
-                    },
-                    "motion_looks_intentional": {
-                        "type": "boolean",
-                        "description": "意図的な頷き/首振りに見えるか（メモ取りや姿勢変更ではない）",
-                    },
-                    "timing_is_appropriate": {
-                        "type": "boolean",
-                        "description": "文の区切れや話の切れ目で、返しても邪魔にならないか",
-                    },
-                    "frequency_is_ok": {
-                        "type": "boolean",
-                        "description": "直近の相槌が多すぎないか（連続して返しすぎていないか）",
-                    },
-                    "context_supports_response": {
-                        "type": "boolean",
-                        "description": "会話の文脈上、今返すのが自然か",
-                    },
-                },
-                "required": [
-                    "motion_has_oscillation",
-                    "motion_looks_intentional",
-                    "timing_is_appropriate",
-                    "frequency_is_ok",
-                    "context_supports_response",
-                ],
-                "additionalProperties": False,
-            },
-            "reason_short": {
+            "reason": {
                 "type": "string",
-                "description": "判断理由を一言で（10文字以内）",
+                "description": "判断理由（20文字以内）",
             },
         },
-        "required": ["should_respond", "checks", "reason_short"],
+        "required": ["should_respond", "reason"],
         "additionalProperties": False,
     }
 
@@ -191,49 +157,37 @@ def build_backchannel_graph(
         return {"candidates": candidates}
 
     def decide(state: AgentState) -> Dict[str, object]:
-        """第一段：返すかどうかを判断する"""
+        """第一段：返すかどうかを判断する（シンプル版）"""
         motion_summary = _extract_motion_summary(state["imu"])
         recent = state.get("recent_backchannel", {})
         if not isinstance(recent, dict):
             recent = {}
 
+        # nod_likelihood_score が高ければ基本的に返す
+        nod_score = motion_summary.get("nod_likelihood_score", 0)
+        has_oscillation = motion_summary.get("has_oscillation", False)
+
         system_text = (
             "あなたは「相槌を返すかどうか」を判断する役です。\n"
-            "聞き手のIMUセンサーから動きの情報が来ています。\n"
-            "この動きが「話し手に伝えるべき反応」かどうかを判断してください。\n\n"
-            "【判断の基準】\n"
-            "- 往復運動があるか？（頷きや首振りは往復する。メモ取りは往復しない）\n"
-            "- 意図的な動きに見えるか？（姿勢変更やストレッチではないか）\n"
-            "- タイミングは適切か？（文の途中で返すと邪魔になる）\n"
-            "- 頻度は適切か？（直近で返しすぎていないか）\n"
-            "- 文脈上、今返すのが自然か？\n\n"
-            "【動きの特徴量の見方】\n"
-            "- has_oscillation: 往復運動があるか。頷きは往復する。\n"
-            "- posture_returned: 姿勢が元に戻ったか。頷きは戻る。メモ取りは戻らない。\n"
-            "- is_symmetric: 正負の動きが対称か。頷きは対称。\n"
-            "- nod_likelihood_score: 頷きらしさのスコア（0-6）。高いほど頷きらしい。\n"
-            "- ratio_vs_5s/30s: 直近5秒/30秒と比べた今の動きの大きさ。1より大きいと普段より大きい動き。\n\n"
+            "聞き手のIMUセンサーが動きを検出しました。\n\n"
+            "【判断基準】\n"
+            "- nod_likelihood_score が 4 以上なら、頷きの可能性が高い → 返す\n"
+            "- has_oscillation が true なら、往復運動がある → 返す傾向\n"
+            "- 直近で相槌を出しすぎていたら → 返さない\n"
+            "- gesture_hint が nod なら理解系、shake なら疑問系の反応\n\n"
             "【重要】\n"
-            "- 迷ったら should_respond: false にしてください\n"
-            "- 返さないことで困ることは少ないですが、返しすぎると邪魔になります\n"
-            "- nod_likelihood_score が 3 以下なら、頷きではない可能性が高いです\n"
-            "- reason_short は10文字以内で書いてください"
+            "- センサーが検出した時点で、何らかの反応があった可能性が高い\n"
+            "- 明確に返すべきでない理由がなければ、返してください\n"
+            "- reason は20文字以内で簡潔に"
         )
 
         prompt = (
-            "【動きの要約】\n"
-            f"{json.dumps(motion_summary, ensure_ascii=False, indent=2)}\n\n"
-            "【IMU詳細】\n"
-            f"{json.dumps(state['imu'], ensure_ascii=False)}\n\n"
-            "【直近の相槌履歴】\n"
-            f"{json.dumps(recent, ensure_ascii=False)}\n\n"
-            "【会話の文脈】\n"
-            f"現在の発話: {state['utterance']}\n"
-            f"発話時刻: {state['utterance_t_sec']}秒\n\n"
-            "【これまでの文字起こし】\n"
-            f"{state['transcript_context']}\n\n"
-            "この動きは、話し手に伝えるべき反応ですか？\n"
-            "チェック項目を埋めて、should_respond を決めてください。"
+            f"nod_likelihood_score: {nod_score}\n"
+            f"has_oscillation: {has_oscillation}\n"
+            f"gesture_hint: {motion_summary.get('gesture_hint', 'other')}\n"
+            f"直近の相槌: {recent.get('seconds_ago', 'なし')}秒前\n"
+            f"現在の発話: {state['utterance']}\n\n"
+            "相槌を返すべきですか？"
         )
 
         schema = _build_decide_schema()
@@ -260,7 +214,7 @@ def build_backchannel_graph(
             decision = json.loads(raw_text)
         except json.JSONDecodeError:
             errors.append("decide_json_parse_failed")
-            decision = {"should_respond": False, "checks": {}, "reason_short": "解析失敗"}
+            decision = {"should_respond": False, "reason": "解析失敗"}
 
         return {"decision": decision, "errors": errors}
 
@@ -341,13 +295,7 @@ def build_backchannel_graph(
         decision = state.get("decision", {})
         reason = ""
         if isinstance(decision, dict):
-            reason = str(decision.get("reason_short", ""))
-            checks = decision.get("checks", {})
-            if isinstance(checks, dict):
-                # チェック項目をreasonに含める
-                false_checks = [k for k, v in checks.items() if v is False]
-                if false_checks:
-                    reason = f"{reason} ({', '.join(false_checks[:2])})"
+            reason = str(decision.get("reason", ""))
         return {
             "selection": {"id": "NONE", "reason": reason},
             "selected_id": "NONE",
@@ -370,8 +318,7 @@ def build_backchannel_graph(
         # decisionの情報をselectionに追加
         decision = state.get("decision", {})
         if isinstance(decision, dict):
-            selection["decision_checks"] = decision.get("checks", {})
-            selection["decision_reason"] = decision.get("reason_short", "")
+            selection["decision_reason"] = decision.get("reason", "")
 
         return {"selected_id": selected_id, "selection": selection}
 

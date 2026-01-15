@@ -28,35 +28,14 @@ from app.transcript.timeline import TranscriptTimeline
 
 
 def _extract_agent_reason(result: Dict[str, object]) -> str:
-    """エージェントの結果からreasonを抽出する（二段判断対応）"""
+    """エージェントの結果からreasonを抽出する"""
     selection = result.get("selection", {})
     if not isinstance(selection, dict):
         return ""
 
-    # 新形式: reason_short + decision_checks
-    reason_short = selection.get("reason_short", "")
-    decision_reason = selection.get("decision_reason", "")
-    decision_checks = selection.get("decision_checks", {})
-
-    # 旧形式との互換性: reason
-    old_reason = selection.get("reason", "")
-
-    if reason_short or decision_reason:
-        # 新形式
-        parts = []
-        if decision_reason:
-            parts.append(str(decision_reason))
-        if reason_short and reason_short != decision_reason:
-            parts.append(str(reason_short))
-        if isinstance(decision_checks, dict):
-            false_checks = [k.replace("_", " ") for k, v in decision_checks.items() if v is False]
-            if false_checks:
-                parts.append(f"NG: {', '.join(false_checks[:3])}")
-        return " / ".join(parts) if parts else ""
-    elif old_reason:
-        # 旧形式
-        return str(old_reason)
-    return ""
+    # decision_reason または reason を取得
+    reason = selection.get("decision_reason", "") or selection.get("reason", "")
+    return str(reason) if reason else ""
 
 
 def imu_loop(
@@ -873,9 +852,8 @@ def run_session(
                     f"選択: {selected_item.directory} s{selected_item.strength} "
                     f"n{selected_item.nod} {selected_item.text}"
                 )
-            if debug_agent:
-                if reason:
-                    emit(f"理由: {reason}")
+            if debug_agent and reason:
+                emit(f"理由: {reason}")
 
             played = player.play_effect(audio_path)
             if status:
