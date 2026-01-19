@@ -58,6 +58,50 @@ def _stats(values: List[float]) -> Dict[str, float]:
     }
 
 
+def _delta_summary(samples: List[ImuSample]) -> Dict[str, object]:
+    if len(samples) < 2:
+        return {}
+    dgx: List[float] = []
+    dgy: List[float] = []
+    dgz: List[float] = []
+    dmag: List[float] = []
+    for prev, cur in zip(samples, samples[1:]):
+        dx = float(cur.gx - prev.gx)
+        dy = float(cur.gy - prev.gy)
+        dz = float(cur.gz - prev.gz)
+        dgx.append(dx)
+        dgy.append(dy)
+        dgz.append(dz)
+        dmag.append(math.sqrt(dx * dx + dy * dy + dz * dz))
+
+    def _summarize(values: List[float]) -> Dict[str, float]:
+        if not values:
+            return {}
+        mean = float(statistics.mean(values))
+        mean_abs = float(statistics.mean([abs(v) for v in values]))
+        max_abs = float(max(abs(v) for v in values))
+        return {
+            "mean": mean,
+            "mean_abs": mean_abs,
+            "max_abs": max_abs,
+        }
+
+    out: Dict[str, object] = {
+        "count": len(dmag),
+        "gx": _summarize(dgx),
+        "gy": _summarize(dgy),
+        "gz": _summarize(dgz),
+        "mag": _summarize(dmag),
+    }
+    for axis in ("gx", "gy", "gz", "mag"):
+        axis_stats = out.get(axis)
+        if isinstance(axis_stats, dict):
+            for k, v in list(axis_stats.items()):
+                if isinstance(v, float):
+                    axis_stats[k] = round(v, 3)
+    return out
+
+
 class ImuBuffer:
     def __init__(self, *, max_seconds: float = 120.0, max_samples: int = 20_000) -> None:
         self._lock = threading.Lock()
@@ -132,9 +176,6 @@ class ImuBuffer:
             raw_dicts.append(
                 {
                     "t_rel_s": round(s.ts - now_ts, 3),
-                    "ax": round(s.ax, 3),
-                    "ay": round(s.ay, 3),
-                    "az": round(s.az, 3),
                     "gx": round(s.gx, 3),
                     "gy": round(s.gy, 3),
                     "gz": round(s.gz, 3),
@@ -165,6 +206,7 @@ class ImuBuffer:
             "sample_rate_hz": None if rate is None else round(rate, 2),
             "raw_window_sec": raw_window_sec,
             "raw_samples": raw_dicts,
+            "gyro_delta": _delta_summary(raw_ds),
             "activity_1s": {k: round(v, 3) for k, v in activity_1s.items()},
             "stats": stats,
         }

@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from app.runtime.session import run_session
 from app.runtime.status import StatusStore
+from app.runtime.trace import TraceWriter
 
     
 def main() -> None:
@@ -34,7 +35,7 @@ def main() -> None:
     parser.add_argument(
         "--transcript",
         default="transcribe.txt",
-        help="Path to transcript with [mm:ss] lines",
+        help="Path to transcript. Supports [mm:ss] lines or plain text (1 line = 1 chunk).",
     )
     parser.add_argument(
         "--transcript-start-sec",
@@ -86,6 +87,11 @@ def main() -> None:
         "--ui",
         action="store_true",
         help="Show a live dashboard in the terminal",
+    )
+    parser.add_argument(
+        "--trace-jsonl",
+        default="",
+        help="Write detailed trace events to this JSONL file",
     )
     parser.add_argument(
         "--agent-interval-sec",
@@ -226,11 +232,12 @@ def main() -> None:
         "--min-gesture-count",
         type=int,
         default=3,
-        help="Minimum number of consecutive same-gesture episodes before triggering LLM call",
+        help="Deprecated (currently unused); kept for compatibility",
     )
     args = parser.parse_args()
 
-    status = StatusStore() if args.ui else None
+    trace = TraceWriter(Path(args.trace_jsonl)) if args.trace_jsonl else None
+    status = StatusStore(trace=trace) if args.ui else None
     if status:
         from app.cli.dashboard import run_dashboard
 
@@ -244,6 +251,7 @@ def main() -> None:
         model=args.model,
         thread_id=args.thread_id,
         status=status,
+        trace=trace,
         debug_imu=args.debug_imu,
         transcript_path=Path(args.transcript),
         transcript_start_sec=args.transcript_start_sec,

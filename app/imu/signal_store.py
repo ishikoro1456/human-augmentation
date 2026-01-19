@@ -63,6 +63,8 @@ class HumanSignalStore:
         self._current_episode_start: Optional[float] = None
         self._current_episode_peak_signal: Dict[str, object] = {}
         self._current_episode_peak_mag: float = 0.0
+        self._current_episode_peak_score: int = 0
+        self._current_episode_max_mag: float = 0.0
 
         # 閾値監視
         self._threshold_min_count: int = 3
@@ -81,7 +83,7 @@ class HumanSignalStore:
         
         Args:
             callback: コールバック関数 (dominant_gesture, counts) を受け取る
-            min_count: 発火に必要な同一ジェスチャーの最小回数
+            min_count: 発火に必要な同一ジェスチャーの最小ポイント
             max_age_s: エピソードの有効期間（秒）
         """
         with self._lock:
@@ -102,12 +104,13 @@ class HumanSignalStore:
         if self._threshold_fired:
             return
 
-        counts = self.count_by_gesture(max_age_s=self._threshold_max_age_s, now=now)
-        relevant = {k: v for k, v in counts.items() if k != "other" and v >= self._threshold_min_count}
+        points = self.points_by_gesture(max_age_s=self._threshold_max_age_s, now=now)
+        relevant = {k: v for k, v in points.items() if k != "other" and v >= self._threshold_min_count}
         if not relevant:
             return
 
         dominant = max(relevant, key=lambda k: relevant[k])
+        counts = self.count_by_gesture(max_age_s=self._threshold_max_age_s, now=now)
         
         # 発火フラグを立ててからコールバック
         with self._lock:
@@ -130,17 +133,28 @@ class HumanSignalStore:
                 self._last_present_signal = dict(signal)
 
                 # エピソードの開始または継続
+                motion_features = signal.get("motion_features", {})
+                if not isinstance(motion_features, dict):
+                    motion_features = {}
+                score = int(motion_features.get("nod_likelihood_score", 0) or 0)
+                mag = float(signal.get("gyro_mag_max_1s", 0) or 0)
                 if self._current_episode_start is None:
                     # 新しいエピソードの開始
                     self._current_episode_start = float(ts)
                     self._current_episode_peak_signal = dict(signal)
-                    self._current_episode_peak_mag = float(signal.get("gyro_mag_max_1s", 0) or 0)
+                    self._current_episode_peak_mag = mag
+                    self._current_episode_peak_score = score
+                    self._current_episode_max_mag = mag
                 else:
                     # エピソードの継続：ピークを更新
-                    mag = float(signal.get("gyro_mag_max_1s", 0) or 0)
-                    if mag > self._current_episode_peak_mag:
+                    if mag > self._current_episode_max_mag:
+                        self._current_episode_max_mag = mag
+                    if (score > self._current_episode_peak_score) or (
+                        score == self._current_episode_peak_score and mag > self._current_episode_peak_mag
+                    ):
                         self._current_episode_peak_signal = dict(signal)
                         self._current_episode_peak_mag = mag
+                        self._current_episode_peak_score = score
             else:
                 # present: false になった → エピソードの終了
                 if self._current_episode_start is not None:
@@ -166,7 +180,7 @@ class HumanSignalStore:
             end_ts=end_ts,
             gesture_hint=str(signal.get("gesture_hint", "other")),
             nod_likelihood_score=int(motion_features.get("nod_likelihood_score", 0) or 0),
-            gyro_mag_max=self._current_episode_peak_mag,
+            gyro_mag_max=self._current_episode_max_mag,
             signal_at_peak=dict(signal),
         )
         self._episodes.append(episode)
@@ -185,6 +199,8 @@ class HumanSignalStore:
         self._current_episode_start = None
         self._current_episode_peak_signal = {}
         self._current_episode_peak_mag = 0.0
+        self._current_episode_peak_score = 0
+        self._current_episode_max_mag = 0.0
 
     def snapshot(self) -> HumanSignalSnapshot:
         with self._lock:
@@ -226,7 +242,7 @@ class HumanSignalStore:
                     end_ts=now_ts,  # まだ終了していないので now を使う
                     gesture_hint=str(signal.get("gesture_hint", "other")),
                     nod_likelihood_score=int(motion_features.get("nod_likelihood_score", 0) or 0),
-                    gyro_mag_max=self._current_episode_peak_mag,
+                    gyro_mag_max=self._current_episode_max_mag,
                     signal_at_peak=dict(signal),
                 )
                 episodes.append(current_ep)
@@ -282,7 +298,7 @@ class HumanSignalStore:
                     end_ts=now_ts,
                     gesture_hint=str(signal.get("gesture_hint", "other")),
                     nod_likelihood_score=int(motion_features.get("nod_likelihood_score", 0) or 0),
-                    gyro_mag_max=self._current_episode_peak_mag,
+                    gyro_mag_max=self._current_episode_max_mag,
                     signal_at_peak=dict(signal),
                 )
                 # 条件チェック
@@ -297,6 +313,8 @@ class HumanSignalStore:
                     self._current_episode_start = None
                     self._current_episode_peak_signal = {}
                     self._current_episode_peak_mag = 0.0
+                    self._current_episode_peak_score = 0
+                    self._current_episode_max_mag = 0.0
 
             return consumed
 
@@ -321,6 +339,30 @@ class HumanSignalStore:
             else:
                 counts["other"] += 1
         return counts
+
+    def points_by_gesture(
+        self,
+        *,
+        max_age_s: Optional[float] = None,
+        now: Optional[float] = None,
+    ) -> Dict[str, int]:
+        """
+        ジェスチャーごとのポイントを合計する
+
+        各エピソードの nod_likelihood_score(0-6) を 0-3 に丸めて足し算する。
+        目安として、弱い動きは 1、中くらいは 2、強い動きは 3 になる。
+
+        Returns:
+            {"nod": 3, "shake": 2, "other": 0, "tilt": 0}
+        """
+        episodes = self.get_episodes(max_age_s=max_age_s, now=now, include_current=True)
+        points: Dict[str, int] = {"nod": 0, "shake": 0, "tilt": 0, "other": 0}
+        for ep in episodes:
+            hint = ep.gesture_hint if ep.gesture_hint in points else "other"
+            score = int(ep.nod_likelihood_score)
+            p = max(0, min(3, score - 3))
+            points[hint] += p
+        return points
 
     def get_dominant_gesture(
         self,

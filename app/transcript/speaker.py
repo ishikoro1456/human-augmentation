@@ -4,6 +4,7 @@ import queue
 import threading
 from dataclasses import dataclass
 import hashlib
+import time
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -19,6 +20,9 @@ from app.tts.openai_tts import synthesize_to_file
 class SpeakerState:
     spoken: List[TranscriptSegment]
     current: Optional[TranscriptSegment]
+    current_audio_path: Path | None
+    current_audio_started_at: float | None
+    current_audio_duration_s: float | None
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,13 @@ class TranscriptSpeaker:
         self._status = status
         self._event_queue = event_queue
         self._lock = threading.Lock()
-        self._state = SpeakerState(spoken=[], current=None)
+        self._state = SpeakerState(
+            spoken=[],
+            current=None,
+            current_audio_path=None,
+            current_audio_started_at=None,
+            current_audio_duration_s=None,
+        )
 
     def start(self) -> None:
         threading.Thread(target=self._run, daemon=True).start()
@@ -64,6 +74,27 @@ class TranscriptSpeaker:
     def get_current(self) -> Optional[TranscriptSegment]:
         with self._lock:
             return self._state.current
+
+    def get_current_playback(self) -> dict[str, object] | None:
+        now = time.time()
+        with self._lock:
+            seg = self._state.current
+            path = self._state.current_audio_path
+            started_at = self._state.current_audio_started_at
+            duration_s = self._state.current_audio_duration_s
+        if seg is None or path is None or started_at is None or duration_s is None:
+            return None
+        elapsed_s = max(0.0, now - float(started_at))
+        remaining_s = max(0.0, float(duration_s) - elapsed_s)
+        return {
+            "t_sec": int(seg.t_sec),
+            "text": str(seg.text),
+            "audio_path": str(path),
+            "duration_s": round(float(duration_s), 3),
+            "elapsed_s": round(float(elapsed_s), 3),
+            "remaining_s": round(float(remaining_s), 3),
+            "started_at_ts": round(float(started_at), 3),
+        }
 
     def get_spoken_context(self) -> str:
         with self._lock:
@@ -129,6 +160,14 @@ class TranscriptSpeaker:
                     )
                 )
             try:
+                duration_s = self._player.estimate_duration_s(cache_path)
+                if duration_s is None and idx < (len(segments) - 1):
+                    duration_s = float(max(0, segments[idx + 1].t_sec - segment.t_sec))
+                started_at = time.time()
+                with self._lock:
+                    self._state.current_audio_path = cache_path
+                    self._state.current_audio_started_at = started_at
+                    self._state.current_audio_duration_s = duration_s
                 self._player.play_music_blocking(cache_path)
             except Exception as exc:
                 print(f"TTS再生に失敗しました: {exc}")
@@ -148,6 +187,9 @@ class TranscriptSpeaker:
             with self._lock:
                 self._state.spoken.append(segment)
                 self._state.current = None
+                self._state.current_audio_path = None
+                self._state.current_audio_started_at = None
+                self._state.current_audio_duration_s = None
             if self._status:
                 self._status.on_transcript_spoken(text=segment.text)
                 self._status.clear_transcript_current()

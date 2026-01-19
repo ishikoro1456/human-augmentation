@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 
-_TIMESTAMP = re.compile(r"^\[(\d{2}):(\d{2})\]\s*(.*)$")
+_TIMESTAMP = re.compile(r"^\[(\d+):(\d{2})\]\s*(.*)$")
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,8 @@ class TranscriptTimeline:
     @classmethod
     def from_file(cls, path: Path) -> "TranscriptTimeline":
         segments: List[TranscriptSegment] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        raw_lines = path.read_text(encoding="utf-8").splitlines()
+        for line in raw_lines:
             line = line.strip()
             if not line:
                 continue
@@ -30,6 +31,21 @@ class TranscriptTimeline:
             mm, ss, text = m.groups()
             t_sec = int(mm) * 60 + int(ss)
             segments.append(TranscriptSegment(t_sec=t_sec, text=text.strip()))
+        if segments:
+            return cls(segments)
+
+        # タイムスタンプが無い場合は、平文の1行ずつを「短いチャンク」として扱う
+        # 実際のSTTのように、短い単位で文章が流れてくる想定
+        cps = 12.0  # chars per second (雑な目安)
+        t_sec = 0
+        for raw in raw_lines:
+            text = raw.strip()
+            if not text:
+                continue
+            segments.append(TranscriptSegment(t_sec=t_sec, text=text))
+            n_chars = len(re.sub(r"\s+", "", text))
+            est = int(round(max(1.0, n_chars / cps)))
+            t_sec += max(1, est)
         return cls(segments)
 
     def window(self, current_sec: int, window_sec: int) -> List[TranscriptSegment]:

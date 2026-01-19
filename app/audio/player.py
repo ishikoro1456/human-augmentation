@@ -70,3 +70,12 @@ class AudioPlayer:
     def stop(self) -> None:
         if self._ready:
             pygame.mixer.music.stop()
+
+    def estimate_duration_s(self, path: Path) -> float | None:
+        with self._lock:
+            self._ensure_ready()
+            try:
+                sound = pygame.mixer.Sound(str(path))
+                return float(sound.get_length())
+            except Exception:
+                return None

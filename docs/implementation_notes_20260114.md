@@ -21,11 +21,12 @@
 ### 1. 二段判断の構造（backchannel_graph.py）
 
 ```
-prepare → decide → [should_respond=true] → choose → resolve
-                 → [should_respond=false] → skip → END
+prepare → decide → [RESPOND_NOW] → choose → resolve
+                 → [WAIT]        → wait   → END
+                 → [SKIP]        → skip   → END
 ```
 
-- `decide`: LLMが「返すかどうか」を判断
+- `decide`: LLMが「いま返す / 少し待つ / 見送る」を判断
 - `choose`: 返す場合のみ、LLMが「何を返すか」を選択
 
 ### 2. 動きの特徴量を追加（signal.py）
@@ -39,42 +40,27 @@ prepare → decide → [should_respond=true] → choose → resolve
 | `nod_likelihood_score` | 頷きらしさスコア（0-6）               |
 | `ratio_vs_5s/30s`      | 直近5秒/30秒との比較                  |
 
-### 3. 区切れベースの判断（session.py）
+### 3. IMUサイン保留 + 区切れ優先 + 締め切り直前の判断（session.py, 2026-01-16）
 
-- 以前：IMUサインが立った瞬間にLLMを呼ぶ
-- 現在：文の区切れ（segment_end）のタイミングでLLMを呼ぶ
+目的は、1回の合図でも3秒以内に返せて、できるだけ区切りで返すことです。
+
+いまの流れは次です。
+
+1. IMUサイン（nod/shake/tilt）が出たら、保留に入れる（最大 `--human-signal-hold-sec` 秒）
+2. 区切り（`segment_end`）が来たら、その瞬間にモデルを呼ぶ（`is_boundary=true`）
+3. 区切りが来ない場合は、締め切り直前に一度だけモデルを呼ぶ（`is_boundary=false`）
+4. モデルは `RESPOND_NOW / WAIT / SKIP` を返す
+5. `WAIT` は保留1件につき1回までにして、残り時間の範囲で待つ
 
 ### 4. エピソード管理（signal_store.py）
 
 - `SignalEpisode`: 1つの動きのまとまりを記録
-- `consume_episodes()`: 区切れで消費
-- 進行中のエピソードも含めて取得できるように修正
+- `count_by_gesture()` / `points_by_gesture()`: 直近のまとまりを集計（主にデバッグ用）
+- 進行中のまとまりも含めて取得できる
 
 ### 5. ジェスチャーキャリブレーション
 
 `--gesture-calibration` オプションで、頷き・首振りの軸を自動推定。これにより、頷きを首振りと誤判定する問題が改善。
-
-### 6. IMU閾値到達でトリガー（2026-01-15追加）
-
-以前の問題：
-- 1回のエピソードでもLLMを呼んでしまい、過剰に反応していた
-- transcribe.txt の2分ごとの区切りがトリガーで、リアルタイム向きではなかった
-
-変更後：
-- 同じジェスチャー（nod/shake）が `min_gesture_count` 回（デフォルト3回）以上になった**瞬間に**LLMを呼ぶ
-- transcribe.txt の区切りは無関係（コンテクスト提供のみ）
-- 発火後は自動でリセットされ、再度3回溜まるまで発火しない
-
-```
---min-gesture-count 3   # 3回以上で反応（デフォルト）
---min-gesture-count 2   # 2回以上で反応（敏感にしたい場合）
-```
-
-**追加した関数**（signal_store.py）:
-- `count_by_gesture()`: ジェスチャーごとの発生回数をカウント
-- `get_dominant_gesture()`: 最も多いジェスチャーを返す（閾値以上のみ）
-- `set_threshold_callback()`: 閾値到達時のコールバックを設定
-- `reset_threshold()`: 発火フラグをリセット
 
 ---
 
@@ -85,6 +71,11 @@ prepare → decide → [should_respond=true] → choose → resolve
 - 分析ステップを入れて、各観点（動き、タイミング、文脈）をスコア化
 - **問題**：LLM呼び出しが遅くなりすぎて非実用的
 - **結果**：シンプルな `should_respond: true/false` に戻した
+
+### IMUの「3回たまったら反応」方式
+
+- 偽陽性は減りましたが、現実の頷きが拾いにくくなりました。
+- いまは「1回の合図を保留して、区切り優先で3秒以内に返す」方式に寄せています。
 
 ---
 
@@ -163,15 +154,10 @@ uv run python app/cli/run.py --ui --debug-agent --debug-signal --gesture-calibra
 
 # キャリブレーションなし（素早く起動）
 uv run python app/cli/run.py --ui --debug-agent --calibration-still-sec 0 --calibration-active-sec 0
-
-# 敏感度を変更（2回でトリガー）
-uv run python app/cli/run.py --ui --debug-agent --debug-signal --gesture-calibration --min-gesture-count 2
 ```
 
 ---
 
 ## 関連ドキュメント
 
-- `docs/implementation_plan.md` - 当初の実装方針
 - `docs/backchannel_timing.md` - タイミングに関する検討
-

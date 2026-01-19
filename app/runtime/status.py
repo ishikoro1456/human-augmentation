@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from app.runtime.trace import TraceWriter
+
 
 @dataclass
 class TranscriptStatus:
@@ -68,21 +70,32 @@ class SessionStatus:
 
 
 class StatusStore:
-    def __init__(self, *, max_logs: int = 200, transcript_tail: int = 6) -> None:
+    def __init__(
+        self,
+        *,
+        max_logs: int = 200,
+        transcript_tail: int = 6,
+        trace: TraceWriter | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._status = SessionStatus()
         self._max_logs = max_logs
         self._transcript_tail = transcript_tail
+        self._trace = trace
 
     def snapshot(self) -> SessionStatus:
         with self._lock:
             return copy.deepcopy(self._status)
 
     def log(self, message: str) -> None:
+        ts = time.time()
         with self._lock:
             self._status.logs.append(message)
             if len(self._status.logs) > self._max_logs:
                 self._status.logs = self._status.logs[-self._max_logs :]
+            trace = self._trace
+        if trace:
+            trace.log(message, source="status", ts=ts)
 
     def set_imu(self, *, motion_text: str, event: str, ts: float) -> None:
         with self._lock:

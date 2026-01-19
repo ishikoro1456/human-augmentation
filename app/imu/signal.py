@@ -347,14 +347,6 @@ def detect_backchannel_signal(
     dominant_sc = axis_sign_changes.get(dominant_axis, 0) if dominant_axis in axis_sign_changes else 0
     dominant_sc_2s = axis_sign_changes_2s.get(dominant_axis, 0) if dominant_axis in axis_sign_changes_2s else 0
 
-    gesture_hint = "other"
-    if dominant_axis == nod_axis and dominant_sc >= 1:
-        gesture_hint = "nod"
-    elif dominant_axis == shake_axis and dominant_sc >= 1:
-        gesture_hint = "shake"
-    elif dominant_axis == tilt_axis and dominant_sc >= 1:
-        gesture_hint = "tilt"
-
     # 追加の特徴量を計算
     motion_duration, first_above_t, last_above_t = _compute_motion_duration(raw_samples, threshold)
     posture_change = _compute_posture_change(raw_samples, dominant_axis, window_sec=2.0)
@@ -386,6 +378,15 @@ def detect_backchannel_signal(
     if 0.3 <= motion_duration <= 2.0:
         nod_likelihood_score += 1
     motion_features["nod_likelihood_score"] = nod_likelihood_score  # 0-6
+
+    # ジェスチャーの判定は少し厳しめにして誤検知を減らす
+    gesture_hint = "other"
+    enough_sc = (dominant_sc >= 2) or (dominant_sc >= 1 and dominant_sc_2s >= 2)
+    if present and nod_likelihood_score >= 4 and enough_sc:
+        if dominant_axis == nod_axis:
+            gesture_hint = "nod"
+        elif dominant_axis == shake_axis:
+            gesture_hint = "shake"
 
     cmp = ">=" if present else "<"
     reason = (
