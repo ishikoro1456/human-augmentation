@@ -290,6 +290,7 @@ def run_listener_session(
                 "thread_id": thread_id,
                 "experiment_id": str(experiment_id),
                 "model": model,
+                "mode": str(mode),
                 "listen": {"host": listen_host, "port": int(listen_port)},
                 "port": port,
                 "baud": int(baud),
