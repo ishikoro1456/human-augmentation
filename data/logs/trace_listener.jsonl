@@ -1,0 +1,3 @@
+{"type": "listener_session_start", "thread_id": "listener-session", "model": "gpt-5.2", "listen": {"host": "0.0.0.0", "port": 8765}, "port": "/dev/cu.usbserial-310", "baud": 115200, "human_signal_hold_sec": 3.0, "human_signal_gyro_sigma": 3.0, "human_signal_abs_threshold": 8.0, "human_signal_max_age_s": 1.5, "human_signal_min_consecutive": 3, "imu_axes": {"nod_axis": "gy", "shake_axis": "gz"}, "gesture_calibration": true, "ts": 1768880200.029}
+{"type": "log", "source": "status", "message": "計測を始めます。3秒後に静止計測に入ります。", "ts": 1768880200.398}
+{"type": "log", "source": "status", "message": "計測(1/2): 静止してください。10秒ほど待ちます。", "ts": 1768880203.4}

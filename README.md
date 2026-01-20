@@ -1,126 +1,91 @@
 # Human Augmentation
 
-ローカルで相槌を返す試作です。文字起こしを読み上げながら、IMUで「相槌の合図」（頷き/首振りなど）が出たときに、区切りを優先して相槌を選び、音声を再生します。
+2台の Mac を使って、リアルタイムで相槌を返す実験をするための試作です。
+
+今回の実験では `app/cli/listener.py` と `app/cli/talker.py` を使います。`app/cli/run.py` は使いません。
 
 ## 前提
 
-- `data/catalog.tsv` に相槌の一覧があること
-- `data/backchannel/` に音声ファイルがあること
-- 環境変数 `OPENAI_API_KEY` を設定していること
+この実験に必要なものを、短くまとめます。
 
-## 起動
+- 2台の Mac（話し手: マイク、聞き手: IMU）
+- 両方の Mac にこのリポジトリがあり、`uv sync` が通る
+- 両方の Mac で `OPENAI_API_KEY` を設定している（`.env` でも可）
+- 話し手側で `ffmpeg` が実行できる
+- `data/catalog.tsv` と `data/backchannel/` がある（相槌の候補と音声）
+
+## 何をどちらで起動するか
+
+聞き手側の Mac では、IMU を読みつつ、話し手から届く文字起こしを受け取り、相槌を再生します（listener）。
+
+話し手側の Mac では、マイクを取り込み、無音で区切って文字起こしし、テキストを聞き手へ送ります（talker）。
+
+## 手順（今回の実験）
+
+### 0) 両方の Mac で準備
+
+両方の Mac で、最初に依存を入れます。
 
 ```
 uv sync
-uv run app/cli/run.py --port /dev/cu.usbserial-140 --baud 115200 --transcript transcribe.txt
 ```
 
-## 2台Macでリアルタイム実験（マイク→文字起こし→相槌）
+### 1) 聞き手側（IMU端末）を起動する
 
-話し手（マイクあり）と、聞き手（IMUあり）を分けて動かすためのモードです。
-
-- 話し手側: マイク音声を区切って文字起こしし、テキストを送ります
-- 聞き手側: 受け取ったテキストと IMU を見て、相槌を選んで再生します
-
-### 1) 聞き手側（IMU端末）を起動
-
-同じネットワーク内から接続できるように、`--listen-host 0.0.0.0` を使います。
+まず IMU の USB シリアル番号を確認します。次を実行して、`usbserial` や `usbmodem` などの名前を探してください。
 
 ```
-uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.jsonl --listen-host 0.0.0.0 --listen-port 8765 --port /dev/cu.usbserial-310 --baud 115200 --gesture-calibration --debug-agent --debug-signal
+ls /dev/cu.*
 ```
 
-### 2) 話し手側（マイク端末）を起動
+候補が複数ある場合は、IMU を抜く前と刺した後で `ls /dev/cu.*` を繰り返し、差分が IMU です。必要なら `ls /dev/tty.*` も見てください。
 
-話し手側は `ffmpeg` が必要です。マイクの入力デバイスは、先に一覧を出して確認できます。
+次に listener を起動します。`--listen-host 0.0.0.0` にすると、同じネットワーク内の別 Mac から接続できます。
+
+```
+uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.jsonl --listen-host 0.0.0.0 --listen-port 8765 --port /dev/cu.usbserial-310 --baud 115200
+```
+
+はじめて動かすときに IMU の向きが分からない場合は、追加で `--gesture-calibration` を付けると、軸の推定が入ります。
+
+起動直後に IMU の計測が入ります。急いで試すだけなら、次で静止/動作の計測を省略できます。
+
+```
+uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.jsonl --listen-host 0.0.0.0 --listen-port 8765 --port /dev/cu.usbserial-310 --baud 115200 --calibration-still-sec 0 --calibration-active-sec 0
+```
+
+相槌が出ない、または出すぎるなどのときは、上のコマンドの末尾に `--debug-agent --debug-signal` を足すと理由が見やすくなります。
+
+### 2) 話し手側（マイク端末）を起動する
+
+聞き手側の IP を調べます。聞き手側の Mac で次を実行し、出てきた IP を控えてください（Wi-Fi の場合）。
+
+```
+ipconfig getifaddr en0
+```
+
+空なら `en1` を試してください。
+
+次に、話し手側でマイクの番号を確認します。
 
 ```
 uv run python app/cli/talker.py --list-devices
 ```
 
-聞き手側の IP を `--connect-host` に入れて起動します。`--mic-device` は環境に合わせてください。
+この表示のうち、`AVFoundation audio devices` の番号が音声の入力です。内蔵マイクを使いたい場合は、そこに出ている `MacBook Proのマイク` などの番号を使います。
+
+起動するときの `--mic-device` は `:<音声番号>` です。たとえば音声番号が 2 なら `:2` です。
 
 ```
-uv run python app/cli/talker.py --connect-host 192.168.0.10 --connect-port 8765 --mic-device :0
+uv run python app/cli/talker.py --connect-host 192.168.0.10 --connect-port 8765 --mic-device :2
 ```
 
-### 2.5) 聞き手側の USB シリアル番号を探す
+### 3) うまく動いているかの目安
 
-聞き手用 IMU が使うシリアルポートは `/dev/cu.*` に現れます。起動前に `ls /dev/cu.*` を実行し、`usbserial` や `usbmodem` などの名前を探してください。候補が複数ある場合は IMU を抜き差しする前後で `ls` を繰り返し、差分がデバイスです。必要なら `ls /dev/tty.*` も併せて確認し、`cu` 系と対応が取れるものを選びます。見つけたポート名を `--port` に渡して起動してください。
+話し手側は、文字起こし結果を標準出力に表示します。聞き手側は、ダッシュボード（`--ui`）に直近の文字起こしと、モデルの判断が出ます。
 
-- 例: `ls /dev/cu.*` → `... /dev/cu.Bluetooth-Incoming-Port /dev/cu.usbserial-1420`
-- IMU が `usbserial` 以外の名前になることもあるので、`tty` 側と合わせて候補を確認すると安全です
-- 起動例: `uv run python app/cli/listener.py --port /dev/cu.usbserial-1420 --baud 115200 --listen-host 0.0.0.0 --listen-port 8765 ...`
+### 4) ログを残す
 
-### 3) ログの見方
+聞き手側は `--trace-jsonl` に、IMU、渡した文脈、モデルの理由、再生結果が残ります。話し手側は `data/stt_segments/` に区切った音声（wav）が残ります。
 
-- 聞き手側の `--trace-jsonl` に、IMU、渡した文脈、モデルの判断（理由を含む）、再生結果が残ります
-- 話し手側は `data/stt_segments/` に区切った音声（wav）を残します（文字起こしの失敗確認に使えます）
-
-起動直後に IMU の計測フェーズがあります。急いで試したい場合は次でスキップできます。
-
-```
-uv run app/cli/run.py --calibration-still-sec 0 --calibration-active-sec 0
-```
-
-計測が忙しく感じる場合は、開始前/フェーズ間/計測後の待ち時間を増やせます。
-
-```
-uv run app/cli/run.py --calibration-start-delay-sec 5 --calibration-between-sec 5 --startup-wait-sec 3
-```
-
-頷き/首振りの「弱い・強い」の差分も最初に覚えさせたい場合は、次を付けます。
-
-```
-uv run app/cli/run.py --gesture-calibration
-```
-
-`transcribe.txt` は OpenAI の TTS で順に読み上げます。読み上げチャンクが終わるたびに、その時点までの文字起こしコンテクストと IMU を LLM に渡します。([platform.openai.com](https://platform.openai.com/docs/guides/text-to-speech?utm_source=openai))
-
-いまの実装では、相槌の判断点は基本的に「読み上げチャンクの区切り（segment_end）」です。ただし、区切りが来ない状態が長く続くことがあるので、合図が出たら最大 `--human-signal-hold-sec` 秒のあいだ保留し、締め切り直前にも一度だけ判断します（区切りではないこともモデルに伝えます）。
-
-相槌の音声は別チャンネルで再生します。読み上げ音声と重なることはありますが、割り込みを避けるために区切りを優先します。
-
-相槌は、IMU から「相槌を出したいサイン」が見えたときだけ出します。何もしていないのに勝手に相槌が増えるのを避けるためです。サインの判定自体は常時回しておき、相槌の判断タイミングで直近のサインを参照します（保持時間は調整できます）。
-
-```
-uv run app/cli/run.py --no-require-human-signal
-```
-
-サインが出てから反応するまでの猶予（クールダウンや遅延の吸収）を調整したい場合は次を付けます。
-
-```
-uv run app/cli/run.py --human-signal-hold-sec 1.2
-```
-
-TTS の音声は `data/tts_cache/` に保存します。`transcribe.txt` の内容や TTS の設定が変わると、別ファイルとして生成します。
-
-起動中の状況を見やすくするには、ダッシュボード表示を付けます。
-
-```
-uv run app/cli/run.py --ui
-```
-
-文字起こしの内容を確認したい場合は次を付けます。
-
-```
-uv run app/cli/run.py --debug-transcript
-```
-
-IMU と選択理由を確認したい場合は次を付けます。
-
-```
-uv run app/cli/run.py --debug-agent
-```
-
-IMUの「相槌サイン」判定（サインあり/なしと閾値）を確認したい場合は次を付けます。
-
-```
-uv run app/cli/run.py --debug-signal
-```
-
-首振り(否定)と頷き(肯定)の向きが混ざる場合は、IMUの取り付け向きと軸の対応が合っていない可能性があります。`--debug-signal` の `axis=` を見ながら、次の軸設定を調整できます。
-
-```
-uv run app/cli/run.py --imu-nod-axis gy --imu-shake-axis gz
-```
+止めるときは、どちらも `Ctrl+C` です。
