@@ -762,15 +762,52 @@ def run_listener_session(
         if raw_ids:
             ids = [x for x in raw_ids if x in items_by_id]
         if not ids:
-            ids = [it.id for it in items[: int(max(1, human_choice_count))]]
+            by_dir: Dict[str, list] = {}
+            dir_order: list[str] = []
+            for it in items:
+                if it.directory not in by_dir:
+                    by_dir[it.directory] = []
+                    dir_order.append(it.directory)
+                by_dir[it.directory].append(it)
+
+            # まずは各カテゴリから「中くらい」を1つずつ選ぶ
+            for d in dir_order:
+                cand = next((it for it in by_dir.get(d, []) if getattr(it, "strength", 0) == 3), None)
+                if cand is None:
+                    cand = by_dir.get(d, [None])[0]
+                if cand is not None:
+                    ids.append(cand.id)
+
+            # 足りなければ、残りをカタログ順に埋める
+            for it in items:
+                if len(ids) >= int(max(1, human_choice_count)):
+                    break
+                if it.id not in ids:
+                    ids.append(it.id)
         ids = ids[: int(max(1, human_choice_count))]
         key_map = {str(i + 1): items_by_id[x] for i, x in enumerate(ids) if x in items_by_id}
 
         def _human_help() -> str:
             lines = []
             for k, it in key_map.items():
-                lines.append(f"{k}: {it.text} (id={it.id}, dir={it.directory})")
-            lines.append("入力: 1-9 / id / help / q")
+                lines.append(f"{k}: {it.text} (id={it.id}, category={it.directory}, strength={it.strength})")
+            lines.append("入力: 1-9 / id / all / help / q")
+            lines.append("補足: Enter で確定します")
+            return "\n".join(lines)
+
+        def _human_all() -> str:
+            by_dir: Dict[str, list] = {}
+            dir_order: list[str] = []
+            for it in items:
+                if it.directory not in by_dir:
+                    by_dir[it.directory] = []
+                    dir_order.append(it.directory)
+                by_dir[it.directory].append(it)
+            lines: list[str] = []
+            for d in dir_order:
+                lines.append(f"{d}:")
+                for it in by_dir.get(d, []):
+                    lines.append(f"  {it.id}: {it.text} (strength={it.strength})")
             return "\n".join(lines)
 
         emit(_human_help())
@@ -790,6 +827,9 @@ def run_listener_session(
                 if line in ("h", "help", "?"):
                     emit(_human_help())
                     continue
+                if line in ("a", "all", "list"):
+                    emit(_human_all())
+                    continue
 
                 item = key_map.get(line) or items_by_id.get(line)
                 if item is None:
@@ -799,6 +839,9 @@ def run_listener_session(
                 if time.time() - last_backchannel_play < backchannel_cooldown_sec:
                     emit("クールダウン中です。少し待ってください。")
                     continue
+
+                if trace:
+                    trace.write({"type": "human_choice", "input": line, "selected_id": item.id, "selected_text": item.text})
 
                 ap = find_audio_file(audio_dir, item) if local_backchannel_play else None
                 play_backchannel(
