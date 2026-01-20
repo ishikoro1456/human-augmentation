@@ -6,7 +6,10 @@ import socket
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+import base64
+import audioop
+import wave
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -18,6 +21,7 @@ except ImportError:  # langgraph のバージョン差異に備える
     InMemorySaver = None
 
 from app.agents.backchannel_graph import build_backchannel_graph
+from app.audio.ffplay_stream import FfplayConfig, FfplayStreamPlayer
 from app.audio.player import AudioPlayer
 from app.core.catalog import load_catalog
 from app.core.selector import find_audio_file
@@ -27,7 +31,7 @@ from app.imu.gesture_calibration import GestureCalibration, run_gesture_calibrat
 from app.imu.reader import read_imu_lines
 from app.imu.signal import detect_backchannel_signal
 from app.imu.signal_store import HumanSignalStore
-from app.net.jsonl import iter_jsonl_messages
+from app.net.jsonl import iter_jsonl_messages, send_jsonl
 from app.runtime.status import StatusStore
 from app.runtime.trace import TraceWriter
 from app.transcript.live_buffer import LiveTranscriptBuffer
@@ -39,6 +43,10 @@ def _extract_agent_reason(result: Dict[str, object]) -> str:
         return ""
     reason = selection.get("decision_reason", "") or selection.get("reason", "")
     return str(reason) if reason else ""
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def imu_loop(
@@ -134,11 +142,19 @@ def human_signal_loop(
         time.sleep(tick_sec)
 
 
+@dataclass
+class TalkerConnection:
+    sock: socket.socket | None = None
+    addr: str = ""
+    lock: object = field(default_factory=threading.Lock)
+
+
 def transcript_server_loop(
     *,
     host: str,
     port: int,
     event_queue: "queue.Queue[Dict[str, object]]",
+    conn_state: TalkerConnection,
     log: callable,
     trace: TraceWriter | None = None,
 ) -> None:
@@ -146,31 +162,38 @@ def transcript_server_loop(
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, int(port)))
     server.listen(1)
-    log(f"文字起こし受信: {host}:{int(port)} で待ち受けます。")
+    log(f"話し手接続: {host}:{int(port)} で待ち受けます。")
     if trace:
-        trace.write({"type": "transcript_listen", "host": host, "port": int(port)})
+        trace.write({"type": "talker_listen", "host": host, "port": int(port)})
     while True:
         conn, addr = server.accept()
         try:
-            log(f"文字起こし受信: 接続 {addr[0]}:{addr[1]}")
+            with conn_state.lock:
+                conn_state.sock = conn
+                conn_state.addr = f"{addr[0]}:{addr[1]}"
+            log(f"話し手接続: 接続 {addr[0]}:{addr[1]}")
             if trace:
-                trace.write({"type": "transcript_connected", "addr": f"{addr[0]}:{addr[1]}"})
+                trace.write({"type": "talker_connected", "addr": f"{addr[0]}:{addr[1]}"})
             for msg in iter_jsonl_messages(conn):
                 msg = dict(msg)
                 msg["_received_ts"] = round(time.time(), 3)
                 event_queue.put(msg)
         except Exception as exc:
-            log(f"文字起こし受信: エラー {exc}")
+            log(f"話し手接続: エラー {exc}")
             if trace:
-                trace.write({"type": "transcript_error", "error": str(exc)})
+                trace.write({"type": "talker_error", "error": str(exc)})
         finally:
+            with conn_state.lock:
+                if conn_state.sock is conn:
+                    conn_state.sock = None
+                    conn_state.addr = ""
             try:
                 conn.close()
             except Exception:
                 pass
-            log("文字起こし受信: 切断")
+            log("話し手接続: 切断")
             if trace:
-                trace.write({"type": "transcript_disconnected"})
+                trace.write({"type": "talker_disconnected"})
 
 
 @dataclass
@@ -219,6 +242,24 @@ def run_listener_session(
     context_max_lines: int = 10,
     early_call_delay_sec: float = 0.2,
     deadline_guard_sec: float = 0.3,
+    speaker_playback: bool = True,
+    speaker_playback_bin: str = "ffplay",
+    stt_model: str = "whisper-1",
+    stt_language: str = "ja",
+    stt_prompt: str = "",
+    stt_segments_dir: Path = Path("data/stt_segments_listener"),
+    vad_frame_ms: int = 20,
+    vad_pre_roll_ms: int = 200,
+    vad_silence_end_ms: int = 500,
+    vad_min_speech_ms: int = 300,
+    vad_calib_sec: float = 1.0,
+    vad_threshold_rms: int = 0,
+    vad_threshold_mult: float = 3.0,
+    send_backchannel_to_talker: bool = True,
+    local_backchannel_play: bool = False,
+    mode: str = "llm",
+    human_choice_count: int = 9,
+    human_choice_ids: str = "",
 ) -> None:
     def emit(message: str) -> None:
         if status:
@@ -257,6 +298,250 @@ def run_listener_session(
 
     imu_buffer = ImuBuffer(max_seconds=600.0)
     threading.Thread(target=imu_loop, args=(port, baud, imu_buffer, debug_imu, status), daemon=True).start()
+
+    # 文字起こしの受信は、IMUの計測より先に待ち受けを開始しておく（talker が先に起動しても接続できるように）
+    talker_conn = TalkerConnection()
+    net_events: queue.Queue = queue.Queue()
+    threading.Thread(
+        target=transcript_server_loop,
+        kwargs={
+            "host": listen_host,
+            "port": int(listen_port),
+            "event_queue": net_events,
+            "conn_state": talker_conn,
+            "log": emit,
+            "trace": trace,
+        },
+        daemon=True,
+    ).start()
+
+    # 話し手音声（ネットワーク）を受け取り、すぐ再生しつつ、無音区切りで文字起こしする
+    transcript_events: queue.Queue = queue.Queue()
+    speaker_state = SpeakerAudioState(speaking=False, silence_ms=0, last_update_ts=time.time())
+    speaker_state_seen = False
+
+    stt_queue: queue.Queue = queue.Queue()
+    stt_segments_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write_wav(path: Path, *, pcm_s16le: bytes, sample_rate: int) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(int(sample_rate))
+            wf.writeframes(pcm_s16le)
+
+    def _stt_worker() -> None:
+        while True:
+            job = stt_queue.get()
+            if not isinstance(job, dict):
+                continue
+            seg_id = job.get("segment_id")
+            pcm = job.get("pcm_s16le")
+            start_ms = job.get("start_ts_ms")
+            end_ms = job.get("end_ts_ms")
+            sample_rate = job.get("sample_rate")
+            if not isinstance(seg_id, int):
+                continue
+            if not isinstance(pcm, (bytes, bytearray)):
+                continue
+            if not isinstance(start_ms, int) or not isinstance(end_ms, int):
+                continue
+            if not isinstance(sample_rate, int):
+                continue
+
+            wav_path = stt_segments_dir / f"seg_{seg_id:04d}_{start_ms}_{end_ms}.wav"
+            try:
+                _write_wav(wav_path, pcm_s16le=bytes(pcm), sample_rate=sample_rate)
+                with wav_path.open("rb") as f:
+                    params: Dict[str, object] = {
+                        "model": stt_model,
+                        "file": f,
+                        "response_format": "text",
+                    }
+                    if stt_language:
+                        params["language"] = stt_language
+                    if stt_prompt:
+                        params["prompt"] = stt_prompt
+                    text = client.audio.transcriptions.create(**params)
+                text = str(text).strip()
+            except Exception as exc:
+                emit(f"文字起こしに失敗しました: {exc}")
+                if trace:
+                    trace.write({"type": "stt_error", "segment_id": int(seg_id), "error": str(exc)})
+                continue
+
+            if text:
+                transcript_events.put(
+                    {
+                        "type": "segment_final",
+                        "segment_id": int(seg_id),
+                        "text": text,
+                        "start_ts_ms": int(start_ms),
+                        "end_ts_ms": int(end_ms),
+                        "ts_ms": int(end_ms),
+                    }
+                )
+                if trace:
+                    trace.write({"type": "stt_segment", "segment_id": int(seg_id), "text": text})
+
+    threading.Thread(target=_stt_worker, daemon=True).start()
+
+    speaker_sample_rate = 16000
+    speaker_frame_ms = int(max(5, vad_frame_ms))
+    speaker_player = FfplayStreamPlayer(
+        FfplayConfig(ffplay_bin=str(speaker_playback_bin), sample_rate=int(speaker_sample_rate), channels=1)
+    )
+    speaker_player_started = False
+    speaker_player_warned = False
+
+    # 無音区切りの状態
+    noise_rms = 200.0
+    calib_until = time.time() + max(0.0, float(vad_calib_sec))
+    speaking = False
+    silence_frames = 0
+    pre_roll: list[bytes] = []
+    segment_frames: list[bytes] = []
+    segment_start_ms = 0
+    seg_id = 0
+
+    def _recompute_vad_derived() -> tuple[int, int, int, int]:
+        frame_ms = int(max(5, speaker_frame_ms))
+        frame_samples = int(speaker_sample_rate * frame_ms / 1000)
+        frame_bytes = frame_samples * 2
+        pre_roll_frames = max(0, int(int(vad_pre_roll_ms) / frame_ms))
+        silence_end_frames = max(1, int(int(vad_silence_end_ms) / frame_ms))
+        min_speech_frames = max(1, int(int(vad_min_speech_ms) / frame_ms))
+        return frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames
+
+    def _audio_loop() -> None:
+        nonlocal speaker_state_seen, speaker_sample_rate, speaker_frame_ms
+        nonlocal speaker_player, speaker_player_started, speaker_player_warned
+        nonlocal noise_rms, calib_until, speaking, silence_frames, pre_roll, segment_frames, segment_start_ms, seg_id
+
+        frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames = _recompute_vad_derived()
+
+        while True:
+            msg = net_events.get()
+            if not isinstance(msg, dict):
+                continue
+            msg_type = str(msg.get("type", ""))
+
+            if msg_type == "hello":
+                audio = msg.get("audio", {})
+                if isinstance(audio, dict):
+                    sr = audio.get("sample_rate")
+                    fm = audio.get("frame_ms")
+                    if isinstance(sr, int) and sr > 0:
+                        speaker_sample_rate = int(sr)
+                    if isinstance(fm, int) and fm >= 5:
+                        speaker_frame_ms = int(fm)
+                    speaker_player.close()
+                    speaker_player = FfplayStreamPlayer(
+                        FfplayConfig(ffplay_bin=str(speaker_playback_bin), sample_rate=int(speaker_sample_rate), channels=1)
+                    )
+                    speaker_player_started = False
+                    speaker_player_warned = False
+                    frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames = _recompute_vad_derived()
+                continue
+
+            if msg_type != "audio_chunk":
+                continue
+
+            data_b64 = msg.get("data_b64", "")
+            if not isinstance(data_b64, str) or not data_b64:
+                continue
+            try:
+                raw = base64.b64decode(data_b64)
+            except Exception:
+                continue
+
+            if speaker_playback:
+                if not speaker_player_started:
+                    speaker_player_started = bool(speaker_player.start())
+                    if (not speaker_player_started) and (not speaker_player_warned):
+                        emit("ffplay が見つからないので、話し手音声の再生を省略します。")
+                        speaker_player_warned = True
+                if speaker_player_started:
+                    speaker_player.write(raw)
+
+            # フレーム処理（念のため、複数フレームがまとまって届いても扱う）
+            i = 0
+            while i + frame_bytes <= len(raw) and frame_bytes > 0:
+                frame = raw[i : i + frame_bytes]
+                i += frame_bytes
+                rms_msg = msg.get("rms")
+                rms = int(rms_msg) if (i == frame_bytes and isinstance(rms_msg, (int, float))) else int(audioop.rms(frame, 2))
+
+                # しきい値の推定（無音のときだけ更新）
+                if time.time() < calib_until:
+                    noise_rms = (noise_rms * 0.95) + (rms * 0.05)
+                elif not speaking:
+                    noise_rms = (noise_rms * 0.995) + (rms * 0.005)
+                thr = int(vad_threshold_rms) if int(vad_threshold_rms) > 0 else int(max(300.0, noise_rms * float(vad_threshold_mult)))
+                is_voice = rms >= thr
+
+                pre_roll.append(frame)
+                if len(pre_roll) > pre_roll_frames:
+                    pre_roll = pre_roll[-pre_roll_frames:]
+
+                now_ts = time.time()
+                if not speaking:
+                    if is_voice:
+                        speaking = True
+                        silence_frames = 0
+                        segment_frames = list(pre_roll)
+                        segment_start_ms = int(msg.get("ts_ms", _now_ms()))
+                        speaker_state.speaking = True
+                        speaker_state.silence_ms = 0
+                        speaker_state.last_update_ts = now_ts
+                        speaker_state_seen = True
+                    else:
+                        speaker_state.speaking = False
+                        speaker_state.silence_ms = int(max(0, speaker_state.silence_ms + int(speaker_frame_ms)))
+                        speaker_state.last_update_ts = now_ts
+                        speaker_state_seen = True
+                    continue
+
+                # speaking 中
+                segment_frames.append(frame)
+                if is_voice:
+                    silence_frames = 0
+                    speaker_state.speaking = True
+                    speaker_state.silence_ms = 0
+                    speaker_state.last_update_ts = now_ts
+                    speaker_state_seen = True
+                    continue
+
+                silence_frames += 1
+                speaker_state.speaking = False
+                speaker_state.silence_ms = int(silence_frames * int(speaker_frame_ms))
+                speaker_state.last_update_ts = now_ts
+                speaker_state_seen = True
+
+                if silence_frames < silence_end_frames:
+                    continue
+
+                # 区切り
+                speaking = False
+                seg_end_ms = int(msg.get("ts_ms", _now_ms()))
+                silence_frames = 0
+
+                if len(segment_frames) >= min_speech_frames:
+                    seg_id += 1
+                    stt_queue.put(
+                        {
+                            "segment_id": int(seg_id),
+                            "pcm_s16le": b"".join(segment_frames),
+                            "start_ts_ms": int(segment_start_ms),
+                            "end_ts_ms": int(seg_end_ms),
+                            "sample_rate": int(speaker_sample_rate),
+                        }
+                    )
+                segment_frames = []
+                pre_roll = []
+
+    threading.Thread(target=_audio_loop, daemon=True).start()
 
     signal_store = HumanSignalStore()
     signal_events: queue.Queue = queue.Queue()
@@ -308,19 +593,6 @@ def run_listener_session(
 
     player = AudioPlayer()
 
-    transcript_events: queue.Queue = queue.Queue()
-    threading.Thread(
-        target=transcript_server_loop,
-        kwargs={
-            "host": listen_host,
-            "port": int(listen_port),
-            "event_queue": transcript_events,
-            "log": emit,
-            "trace": trace,
-        },
-        daemon=True,
-    ).start()
-
     threading.Thread(
         target=human_signal_loop,
         args=(imu_buffer, signal_store),
@@ -342,8 +614,7 @@ def run_listener_session(
     emit("聞き手アプリを開始しました。IMUの合図に反応して相槌を返します。")
 
     transcript = LiveTranscriptBuffer(max_lines=300)
-    speaker_state = SpeakerAudioState(speaking=False, silence_ms=0, last_update_ts=time.time())
-    speaker_state_seen = False
+    last_pause_like_boundary = False
 
     last_agent_call = 0.0
     last_backchannel_play = 0.0
@@ -351,11 +622,52 @@ def run_listener_session(
     recent_ids: list[str] = []
     recent_texts: list[str] = []
 
+    def send_backchannel(
+        *,
+        selected_id: str,
+        selected_text: str,
+        reason: str,
+        latency_ms: int,
+        call_id: str,
+        planned: bool,
+    ) -> bool:
+        if not send_backchannel_to_talker:
+            return False
+        payload: Dict[str, object] = {
+            "type": "backchannel",
+            "id": str(selected_id),
+            "text": str(selected_text),
+            "reason": str(reason),
+            "planned": bool(planned),
+            "latency_ms": int(latency_ms),
+            "call_id": str(call_id),
+            "ts_ms": int(_now_ms()),
+        }
+        with talker_conn.lock:
+            sock = talker_conn.sock
+            addr = talker_conn.addr
+            if sock is None:
+                return False
+            try:
+                send_jsonl(sock, payload)
+                if trace:
+                    trace.write({"type": "backchannel_sent", "addr": addr, **payload})
+                return True
+            except Exception as exc:
+                emit(f"相槌の送信に失敗しました: {exc}")
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                talker_conn.sock = None
+                talker_conn.addr = ""
+                return False
+
     def play_backchannel(
         *,
         selected_id: str,
         selected_text: str,
-        audio_path: Path,
+        audio_path: Path | None,
         reason: str,
         latency_ms: int,
         call_id: str,
@@ -375,7 +687,17 @@ def run_listener_session(
             if debug_agent and reason:
                 emit(f"理由: {reason}")
 
-        played = player.play_effect(audio_path)
+        sent = send_backchannel(
+            selected_id=selected_id,
+            selected_text=selected_text,
+            reason=reason,
+            latency_ms=latency_ms,
+            call_id=call_id,
+            planned=planned,
+        )
+        played_local = False
+        if local_backchannel_play and audio_path is not None:
+            played_local = player.play_effect(audio_path)
         if trace:
             trace.write(
                 {
@@ -384,18 +706,20 @@ def run_listener_session(
                     "thread_id": thread_id,
                     "selected_id": selected_id,
                     "selected_text": selected_text,
-                    "audio_path": str(audio_path),
-                    "played": bool(played),
+                    "audio_path": "" if audio_path is None else str(audio_path),
+                    "sent_to_talker": bool(sent),
+                    "played_local": bool(played_local),
                     "planned": bool(planned),
                 }
             )
-        if status:
-            status.set_backchannel_playback(path=audio_path, played=played)
-        if not played:
+        if status and audio_path is not None:
+            status.set_backchannel_playback(path=audio_path, played=(sent or played_local))
+        if local_backchannel_play and (not played_local):
             emit("再生中の音があるので、相槌の再生をスキップします。")
+        if local_backchannel_play and played_local and ((not status) or debug_agent):
+            emit(f"再生(ローカル): {audio_path}")
+        if (not sent) and (not played_local):
             return False
-        if (not status) or debug_agent:
-            emit(f"再生: {audio_path}")
         last_backchannel_play = time.time()
         last_backchannel_text = selected_text
         recent_ids.append(selected_id)
@@ -404,9 +728,79 @@ def run_listener_session(
             recent_ids = recent_ids[-12:]
         if len(recent_texts) > 12:
             recent_texts = recent_texts[-12:]
-        while player.is_effect_playing():
-            time.sleep(0.02)
+        if local_backchannel_play:
+            while player.is_effect_playing():
+                time.sleep(0.02)
         return True
+
+    mode_norm = str(mode or "llm").strip().lower()
+    if mode_norm not in ("llm", "human", "none"):
+        emit(f"mode が不明なので llm にします: {mode}")
+        mode_norm = "llm"
+
+    if mode_norm == "none":
+        emit("モード: none（相槌を返しません）")
+    elif mode_norm == "human":
+        emit("モード: human（キー入力で相槌を送ります）")
+
+        items_by_id = {it.id: it for it in items}
+        ids: list[str] = []
+        raw_ids = [x.strip() for x in str(human_choice_ids or "").split(",") if x.strip()]
+        if raw_ids:
+            ids = [x for x in raw_ids if x in items_by_id]
+        if not ids:
+            ids = [it.id for it in items[: int(max(1, human_choice_count))]]
+        ids = ids[: int(max(1, human_choice_count))]
+        key_map = {str(i + 1): items_by_id[x] for i, x in enumerate(ids) if x in items_by_id}
+
+        def _human_help() -> str:
+            lines = []
+            for k, it in key_map.items():
+                lines.append(f"{k}: {it.text} (id={it.id}, dir={it.directory})")
+            lines.append("入力: 1-9 / id / help / q")
+            return "\n".join(lines)
+
+        emit(_human_help())
+
+        def _human_input_loop() -> None:
+            while True:
+                try:
+                    line = input().strip()
+                except EOFError:
+                    time.sleep(0.1)
+                    continue
+                if not line:
+                    continue
+                if line in ("q", "quit", "exit"):
+                    emit("人間入力を終了します。")
+                    return
+                if line in ("h", "help", "?"):
+                    emit(_human_help())
+                    continue
+
+                item = key_map.get(line) or items_by_id.get(line)
+                if item is None:
+                    emit("見つかりません。help で一覧を見てください。")
+                    continue
+
+                if time.time() - last_backchannel_play < backchannel_cooldown_sec:
+                    emit("クールダウン中です。少し待ってください。")
+                    continue
+
+                ap = find_audio_file(audio_dir, item) if local_backchannel_play else None
+                play_backchannel(
+                    selected_id=item.id,
+                    selected_text=item.text,
+                    audio_path=ap,
+                    reason="human",
+                    latency_ms=0,
+                    call_id=("human-" + uuid.uuid4().hex[:10]),
+                    planned=False,
+                )
+
+        threading.Thread(target=_human_input_loop, daemon=True).start()
+    else:
+        emit("モード: llm（IMU + モデルで相槌を決めます）")
 
     pending: Dict[str, object] | None = None
 
@@ -414,23 +808,14 @@ def run_listener_session(
         boundary_event = False
         boundary_text: str | None = None
 
-        # 文字起こしイベントを処理
+        # 文字起こしイベントを処理（STT結果）
         try:
             while True:
                 ev = transcript_events.get_nowait()
                 if not isinstance(ev, dict):
                     continue
                 ev_type = str(ev.get("type", ""))
-                if ev_type == "speech_state":
-                    speaking = bool(ev.get("speaking", False))
-                    silence_ms = ev.get("silence_ms", 0)
-                    if not isinstance(silence_ms, (int, float)):
-                        silence_ms = 0
-                    speaker_state.speaking = speaking
-                    speaker_state.silence_ms = int(max(0, float(silence_ms)))
-                    speaker_state.last_update_ts = time.time()
-                    speaker_state_seen = True
-                elif ev_type == "segment_final":
+                if ev_type == "segment_final":
                     text = str(ev.get("text", "") or "").strip()
                     speaker_ts_ms = ev.get("ts_ms")
                     if not isinstance(speaker_ts_ms, int):
@@ -449,6 +834,24 @@ def run_listener_session(
             pass
 
         now = time.time()
+
+        # 話し手が少し黙っているなら、区切りに近い合図として扱う（区切り扱いは1回だけ）
+        speaker_silence_ms_live = int(max(0, speaker_state.silence_ms))
+        if speaker_state_seen and (not speaker_state.speaking):
+            speaker_silence_ms_live += int(max(0.0, now - speaker_state.last_update_ts) * 1000)
+        speaker_pause_like_boundary = (
+            bool(speaker_state_seen)
+            and (not speaker_state.speaking)
+            and (speaker_silence_ms_live >= int(max(0, boundary_silence_ms)))
+        )
+        pause_boundary_event = bool(speaker_pause_like_boundary) and (not bool(last_pause_like_boundary))
+        last_pause_like_boundary = bool(speaker_pause_like_boundary)
+        if pause_boundary_event:
+            boundary_event = True
+
+        if mode_norm != "llm":
+            time.sleep(0.05)
+            continue
 
         # IMUイベントを処理（最新だけ残す）
         latest_signal_event: Dict[str, object] | None = None
@@ -536,12 +939,15 @@ def run_listener_session(
         # planned が armed なら再生する
         if pending is not None and bool(pending.get("planned_armed", False)) and isinstance(pending.get("planned"), dict):
             if player.is_effect_playing():
+                time.sleep(0.01)
                 continue
             if now - last_backchannel_play < backchannel_cooldown_sec:
+                time.sleep(0.01)
                 continue
             planned = pending.get("planned")
             planned_after_ts = pending.get("planned_after_ts", 0.0)
             if isinstance(planned_after_ts, (int, float)) and now < float(planned_after_ts):
+                time.sleep(0.01)
                 continue
             pid = planned.get("selected_id")
             ptext = planned.get("selected_text")
@@ -552,11 +958,10 @@ def run_listener_session(
             if (
                 isinstance(pid, str)
                 and isinstance(ptext, str)
-                and isinstance(paudio, str)
                 and isinstance(pcall, str)
                 and isinstance(plat, int)
             ):
-                audio_path = Path(paudio)
+                audio_path = Path(paudio) if isinstance(paudio, str) and paudio else None
                 played = play_backchannel(
                     selected_id=pid,
                     selected_text=ptext,
@@ -574,6 +979,7 @@ def run_listener_session(
 
         # 呼び出し要否
         if pending is None:
+            time.sleep(0.01)
             continue
 
         decision_point = ""
@@ -593,6 +999,7 @@ def run_listener_session(
         else:
             wait_until_ts = pending.get("wait_until_ts", 0.0)
             if isinstance(wait_until_ts, (int, float)) and now < float(wait_until_ts):
+                time.sleep(0.01)
                 continue
             early_called = bool(pending.get("early_called", False))
             deadline_called = bool(pending.get("deadline_called", False))
@@ -612,10 +1019,13 @@ def run_listener_session(
                 pending[mark_pending_key] = True
 
         if player.is_effect_playing():
+            time.sleep(0.01)
             continue
         if now - last_backchannel_play < backchannel_cooldown_sec:
+            time.sleep(0.01)
             continue
         if now - last_agent_call < agent_interval_sec:
+            time.sleep(0.01)
             continue
 
         deadline_ts = pending.get("deadline_ts")
@@ -673,15 +1083,6 @@ def run_listener_session(
         transcript_context = transcript.context(max_lines=context_max_lines).strip()
         if not transcript_context:
             transcript_context = "文字起こしはまだありません"
-
-        speaker_silence_ms_live = int(max(0, speaker_state.silence_ms))
-        if speaker_state_seen and (not speaker_state.speaking):
-            speaker_silence_ms_live += int(max(0.0, now - speaker_state.last_update_ts) * 1000)
-        speaker_pause_like_boundary = (
-            bool(speaker_state_seen)
-            and (not speaker_state.speaking)
-            and (speaker_silence_ms_live >= int(max(0, boundary_silence_ms)))
-        )
 
         timing: Dict[str, object] = {
             "is_boundary": bool(is_boundary),
@@ -792,11 +1193,11 @@ def run_listener_session(
             pending = None
             continue
 
-        audio_path = find_audio_file(audio_dir, selected_item)
-        if not audio_path:
-            emit("音声ファイルが見つかりません。")
-            pending = None
-            continue
+        audio_path: Path | None = None
+        if local_backchannel_play:
+            audio_path = find_audio_file(audio_dir, selected_item)
+            if not audio_path:
+                emit("音声ファイルが見つからないので、ローカル再生はできません。")
 
         if decision_action == "WAIT" and pending is not None:
             wait_ms = 0
@@ -809,7 +1210,7 @@ def run_listener_session(
                 "call_id": call_id,
                 "selected_id": selected_item.id,
                 "selected_text": selected_item.text,
-                "audio_path": str(audio_path),
+                "audio_path": "" if audio_path is None else str(audio_path),
                 "reason": reason,
                 "latency_ms": int(latency_ms),
                 "planned_at_ts": round(time.time(), 3),
