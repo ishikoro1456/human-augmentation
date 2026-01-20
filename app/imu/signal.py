@@ -226,7 +226,6 @@ def detect_backchannel_signal(
     min_consecutive_above: int = 3,
     nod_axis: str = "gy",
     shake_axis: str = "gz",
-    tilt_axis: str = "gx",
 ) -> Dict[str, object]:
     age = imu_bundle.get("last_sample_age_s")
     if not isinstance(age, (int, float)):
@@ -332,7 +331,7 @@ def detect_backchannel_signal(
         }
         dominant_axis = max(axis_abs_mean, key=lambda k: axis_abs_mean[k])
 
-    axis_map = {"nod": nod_axis, "shake": shake_axis, "tilt": tilt_axis}
+    axis_map = {"nod": nod_axis, "shake": shake_axis}
     axis_sign_changes = {
         "gx": _sign_changes(axis_values_1s["gx"]),
         "gy": _sign_changes(axis_values_1s["gy"]),

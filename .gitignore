@@ -30,9 +30,6 @@ dist/
 *.wav
 *.mp3
 
-# Data outputs
-backchannel/
-data/backchannel/
 data/tts_cache/
 
 # UV

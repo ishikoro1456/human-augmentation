@@ -93,7 +93,6 @@ def human_signal_loop(
     min_consecutive_above: int,
     nod_axis: str,
     shake_axis: str,
-    tilt_axis: str,
     tick_sec: float = 0.1,
     event_queue: "queue.Queue[Dict[str, object]] | None" = None,
     debug: bool = False,
@@ -119,7 +118,6 @@ def human_signal_loop(
             min_consecutive_above=min_consecutive_above,
             nod_axis=nod_axis,
             shake_axis=shake_axis,
-            tilt_axis=tilt_axis,
         )
         store.update(ts=now, signal=signal)
         present = bool(signal.get("present", False))
@@ -161,7 +159,6 @@ def backchannel_loop_on_signal(
     gesture_calib: GestureCalibration | None,
     imu_nod_axis: str,
     imu_shake_axis: str,
-    imu_tilt_axis: str,
     speaker: TranscriptSpeaker,
     player: AudioPlayer,
     thread_id: str,
@@ -254,7 +251,6 @@ def backchannel_loop_on_signal(
             imu_bundle["imu_axis_map_effective"] = {
                 "nod_axis": imu_nod_axis,
                 "shake_axis": imu_shake_axis,
-                "tilt_axis": imu_tilt_axis,
             }
 
         human_signal = dict(signal)
@@ -450,7 +446,6 @@ def run_session(
     human_signal_hold_sec: float = 3.0,
     imu_nod_axis: str = "gy",
     imu_shake_axis: str = "gz",
-    imu_tilt_axis: str = "gx",
     gesture_calibration: bool = False,
     gesture_weak_sec: float = 2.0,
     gesture_strong_sec: float = 2.0,
@@ -492,7 +487,6 @@ def run_session(
                 "imu_axes": {
                     "nod_axis": imu_nod_axis,
                     "shake_axis": imu_shake_axis,
-                    "tilt_axis": imu_tilt_axis,
                 },
                 "gesture_calibration": bool(gesture_calibration),
                 "debug": {
@@ -547,17 +541,14 @@ def run_session(
 
     imu_nod_axis_effective = imu_nod_axis
     imu_shake_axis_effective = imu_shake_axis
-    imu_tilt_axis_effective = imu_tilt_axis
     if gesture_calib and auto_imu_axis_map and gesture_calib.axis_suggest:
         imu_nod_axis_effective = gesture_calib.axis_suggest.get("nod_axis", imu_nod_axis_effective)
         imu_shake_axis_effective = gesture_calib.axis_suggest.get("shake_axis", imu_shake_axis_effective)
-        imu_tilt_axis_effective = gesture_calib.axis_suggest.get("tilt_axis", imu_tilt_axis_effective)
     if status and gesture_calib is not None:
         suggest = gesture_calib.axis_suggest
         axis_map = (
-            f"suggest nod={suggest.get('nod_axis','-')}, shake={suggest.get('shake_axis','-')}, "
-            f"tilt={suggest.get('tilt_axis','-')} / "
-            f"effective nod={imu_nod_axis_effective}, shake={imu_shake_axis_effective}, tilt={imu_tilt_axis_effective}"
+            f"suggest nod={suggest.get('nod_axis','-')}, shake={suggest.get('shake_axis','-')} / "
+            f"effective nod={imu_nod_axis_effective}, shake={imu_shake_axis_effective}"
         )
         status.set_gesture_calibration(
             summaries=gesture_calib.summaries(),
@@ -680,7 +671,6 @@ def run_session(
             "min_consecutive_above": human_signal_min_consecutive,
             "nod_axis": imu_nod_axis_effective,
             "shake_axis": imu_shake_axis_effective,
-            "tilt_axis": imu_tilt_axis_effective,
             "event_queue": signal_events,
             "debug": debug_signal and (status is None),
             "status": status,
@@ -1009,7 +999,6 @@ def run_session(
                 imu_bundle["imu_axis_map_effective"] = {
                     "nod_axis": imu_nod_axis_effective,
                     "shake_axis": imu_shake_axis_effective,
-                    "tilt_axis": imu_tilt_axis_effective,
                 }
 
             sig = signal_store.snapshot()

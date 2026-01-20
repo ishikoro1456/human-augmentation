@@ -46,7 +46,7 @@ prepare → decide → [RESPOND_NOW] → choose → resolve
 
 いまの流れは次です。
 
-1. IMUサイン（nod/shake/tilt）が出たら、保留に入れる（最大 `--human-signal-hold-sec` 秒）
+1. IMUサイン（nod/shake）が出たら、保留に入れる（最大 `--human-signal-hold-sec` 秒）
 2. 区切り（`segment_end`）が来たら、その瞬間にモデルを呼ぶ（`is_boundary=true`）
 3. 区切りが来ない場合は、締め切り直前に一度だけモデルを呼ぶ（`is_boundary=false`）
 4. モデルは `RESPOND_NOW / WAIT / SKIP` を返す

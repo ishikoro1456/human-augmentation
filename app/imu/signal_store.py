@@ -328,10 +328,10 @@ class HumanSignalStore:
         ジェスチャーごとのエピソード数をカウントする
         
         Returns:
-            {"nod": 2, "shake": 1, "other": 0, "tilt": 0}
+            {"nod": 2, "shake": 1, "other": 0}
         """
         episodes = self.get_episodes(max_age_s=max_age_s, now=now, include_current=True)
-        counts: Dict[str, int] = {"nod": 0, "shake": 0, "tilt": 0, "other": 0}
+        counts: Dict[str, int] = {"nod": 0, "shake": 0, "other": 0}
         for ep in episodes:
             hint = ep.gesture_hint
             if hint in counts:
@@ -353,10 +353,10 @@ class HumanSignalStore:
         目安として、弱い動きは 1、中くらいは 2、強い動きは 3 になる。
 
         Returns:
-            {"nod": 3, "shake": 2, "other": 0, "tilt": 0}
+            {"nod": 3, "shake": 2, "other": 0}
         """
         episodes = self.get_episodes(max_age_s=max_age_s, now=now, include_current=True)
-        points: Dict[str, int] = {"nod": 0, "shake": 0, "tilt": 0, "other": 0}
+        points: Dict[str, int] = {"nod": 0, "shake": 0, "other": 0}
         for ep in episodes:
             hint = ep.gesture_hint if ep.gesture_hint in points else "other"
             score = int(ep.nod_likelihood_score)
@@ -378,7 +378,7 @@ class HumanSignalStore:
             min_count: この回数以上ないとNoneを返す
         
         Returns:
-            "nod", "shake", "tilt", または None
+            "nod", "shake", または None
         """
         counts = self.count_by_gesture(max_age_s=max_age_s, now=now)
         # other は除外

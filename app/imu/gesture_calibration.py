@@ -217,12 +217,6 @@ def run_gesture_calibration(
         axis_suggest["nod_axis"] = nod.dominant_axis
     if shake:
         axis_suggest["shake_axis"] = shake.dominant_axis
-    if "nod_axis" in axis_suggest and "shake_axis" in axis_suggest:
-        axes = {"gx", "gy", "gz"}
-        used = {axis_suggest["nod_axis"], axis_suggest["shake_axis"]}
-        rest = list(axes - used)
-        if rest:
-            axis_suggest["tilt_axis"] = rest[0]
 
     finished_at = time.time()
     calib = GestureCalibration(
@@ -236,8 +230,7 @@ def run_gesture_calibration(
         _log(
             "軸の推定: "
             f"nod={axis_suggest.get('nod_axis','-')}, "
-            f"shake={axis_suggest.get('shake_axis','-')}, "
-            f"tilt={axis_suggest.get('tilt_axis','-')}"
+            f"shake={axis_suggest.get('shake_axis','-')}"
         )
     if warnings:
         _log(f"注意: {', '.join(warnings)}")

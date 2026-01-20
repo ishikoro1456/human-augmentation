@@ -223,12 +223,6 @@ def main() -> None:
         help="Which gyro axis represents a shaking-like motion for this sensor mounting",
     )
     parser.add_argument(
-        "--imu-tilt-axis",
-        choices=["gx", "gy", "gz"],
-        default="gx",
-        help="Which gyro axis represents a head-tilt-like motion for this sensor mounting",
-    )
-    parser.add_argument(
         "--min-gesture-count",
         type=int,
         default=3,
@@ -277,7 +271,6 @@ def main() -> None:
         human_signal_hold_sec=args.human_signal_hold_sec,
         imu_nod_axis=args.imu_nod_axis,
         imu_shake_axis=args.imu_shake_axis,
-        imu_tilt_axis=args.imu_tilt_axis,
         gesture_calibration=args.gesture_calibration,
         gesture_weak_sec=args.gesture_weak_sec,
         gesture_strong_sec=args.gesture_strong_sec,
