@@ -2,6 +2,8 @@
 import argparse
 import sys
 import threading
+import time
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -31,6 +33,7 @@ def main() -> None:
 
     parser.add_argument("--ui", action="store_true")
     parser.add_argument("--trace-jsonl", default="")
+    parser.add_argument("--experiment-id", default="", help="省略すると自動生成します")
 
     parser.add_argument("--mode", choices=["llm", "human", "none"], default="llm")
     parser.add_argument("--human-choice-count", type=int, default=9)
@@ -90,7 +93,13 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    exp_id = str(args.experiment_id or "").strip()
+    if not exp_id:
+        exp_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+
     trace = TraceWriter(Path(args.trace_jsonl)) if args.trace_jsonl else None
+    if trace:
+        trace.set_meta(role="listener", experiment_id=exp_id)
     status = StatusStore(trace=trace) if args.ui else None
     if status:
         from app.cli.dashboard import run_dashboard
@@ -106,6 +115,7 @@ def main() -> None:
         baud=args.baud,
         model=args.model,
         thread_id=args.thread_id,
+        experiment_id=exp_id,
         status=status,
         trace=trace,
         mode=args.mode,

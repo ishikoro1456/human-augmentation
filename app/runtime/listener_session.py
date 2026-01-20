@@ -153,6 +153,7 @@ def transcript_server_loop(
     *,
     host: str,
     port: int,
+    experiment_id: str,
     event_queue: "queue.Queue[Dict[str, object]]",
     conn_state: TalkerConnection,
     log: callable,
@@ -174,6 +175,14 @@ def transcript_server_loop(
             log(f"話し手接続: 接続 {addr[0]}:{addr[1]}")
             if trace:
                 trace.write({"type": "talker_connected", "addr": f"{addr[0]}:{addr[1]}"})
+            try:
+                send_jsonl(conn, {"type": "session", "experiment_id": str(experiment_id), "ts_ms": int(_now_ms())})
+                if trace:
+                    trace.write({"type": "session_sent", "addr": f"{addr[0]}:{addr[1]}"})
+            except Exception as exc:
+                log(f"話し手接続: session を送れませんでした: {exc}")
+                if trace:
+                    trace.write({"type": "session_send_error", "error": str(exc)})
             for msg in iter_jsonl_messages(conn):
                 msg = dict(msg)
                 msg["_received_ts"] = round(time.time(), 3)
@@ -213,6 +222,7 @@ def run_listener_session(
     baud: int,
     model: str,
     thread_id: str,
+    experiment_id: str,
     status: StatusStore | None = None,
     trace: TraceWriter | None = None,
     debug_imu: bool = False,
@@ -278,6 +288,7 @@ def run_listener_session(
             {
                 "type": "listener_session_start",
                 "thread_id": thread_id,
+                "experiment_id": str(experiment_id),
                 "model": model,
                 "listen": {"host": listen_host, "port": int(listen_port)},
                 "port": port,
@@ -307,6 +318,7 @@ def run_listener_session(
         kwargs={
             "host": listen_host,
             "port": int(listen_port),
+            "experiment_id": str(experiment_id),
             "event_queue": net_events,
             "conn_state": talker_conn,
             "log": emit,
@@ -635,6 +647,7 @@ def run_listener_session(
             return False
         payload: Dict[str, object] = {
             "type": "backchannel",
+            "experiment_id": str(experiment_id),
             "id": str(selected_id),
             "text": str(selected_text),
             "reason": str(reason),
