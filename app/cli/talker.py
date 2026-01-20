@@ -240,6 +240,7 @@ def main() -> None:
                                 "type": "backchannel_play",
                                 "id": bid,
                                 "text": btext,
+                                "call_id": call_id,
                                 "audio_path": str(path),
                                 "played": bool(played),
                             }
