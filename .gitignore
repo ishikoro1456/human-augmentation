@@ -26,9 +26,6 @@ dist/
 .vscode/
 .idea/
 
-# Audio outputs
-*.wav
-*.mp3
 
 data/tts_cache/
 
