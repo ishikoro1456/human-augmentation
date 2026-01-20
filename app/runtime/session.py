@@ -708,7 +708,6 @@ def run_session(
     history_stride_sec = 120
     history_max_lines = 10
     deadline_guard_sec = 0.3
-    early_call_delay_sec = 0.1
     max_wait_for_boundary_sec = float(human_signal_hold_sec)
     duck_music_volume = 0.35
 
@@ -790,10 +789,8 @@ def run_session(
                 pending = {
                     "signal_ts": float(ts),
                     "deadline_ts": float(ts) + float(human_signal_hold_sec),
-                    "early_call_ts": float(ts) + float(early_call_delay_sec),
                     "deadline_call_ts": float(ts)
                     + max(0.0, float(human_signal_hold_sec) - float(deadline_guard_sec)),
-                    "early_called": False,
                     "deadline_called": False,
                     "wait_used": False,
                     "wait_until_ts": 0.0,
@@ -809,7 +806,6 @@ def run_session(
                             "hint": hint,
                             "signal_ts": round(float(ts), 3),
                             "deadline_ts": round(float(pending["deadline_ts"]), 3),
-                            "early_call_ts": round(float(pending["early_call_ts"]), 3),
                             "deadline_call_ts": round(float(pending["deadline_call_ts"]), 3),
                             "signal": dict(sig),
                         }
@@ -849,7 +845,6 @@ def run_session(
                             "type": "pending_expired",
                             "signal_ts": pending.get("signal_ts"),
                             "deadline_ts": pending.get("deadline_ts"),
-                            "early_called": bool(pending.get("early_called", False)),
                             "deadline_called": bool(pending.get("deadline_called", False)),
                             "wait_used": bool(pending.get("wait_used", False)),
                             "planned": pending.get("planned"),
@@ -926,14 +921,9 @@ def run_session(
                 wait_until_ts = pending.get("wait_until_ts", 0.0)
                 if isinstance(wait_until_ts, (int, float)) and now < float(wait_until_ts):
                     continue
-                early_called = bool(pending.get("early_called", False))
                 deadline_called = bool(pending.get("deadline_called", False))
-                early_call_ts = pending.get("early_call_ts")
                 deadline_call_ts = pending.get("deadline_call_ts")
-                if (not early_called) and isinstance(early_call_ts, (int, float)) and now >= float(early_call_ts):
-                    decision_point = "signal_early"
-                    mark_pending_key = "early_called"
-                elif (not deadline_called) and isinstance(deadline_call_ts, (int, float)) and now >= float(deadline_call_ts):
+                if (not deadline_called) and isinstance(deadline_call_ts, (int, float)) and now >= float(deadline_call_ts):
                     decision_point = "deadline_no_boundary"
                     mark_pending_key = "deadline_called"
                 else:
@@ -966,7 +956,7 @@ def run_session(
                     wait_budget_ms = min(wait_budget_ms, int(max(0.0, boundary_remaining_s * 1000)))
                     wait_allowed = (
                         (not wait_used)
-                        and (decision_point == "signal_early")
+                        and (decision_point == "deadline_no_boundary")
                         and (boundary_remaining_s <= float(max_wait_for_boundary_sec))
                         and (int(boundary_remaining_s * 1000) <= remaining_ms)
                     )

@@ -1,0 +1,82 @@
+短く言うと、はい。
+MVD のメインのシナリオで使う VC 発行は、ほぼ「静的なハードコード＋シードスクリプト」で済ませています。
+
+少し分解します。
+
+1. MVD の VC はどうやって用意されているか
+
+MVD のデモで出てくる二つの VC を思い出してください。
+
+* MembershipCredential
+* DataProcessorCredential
+
+README にこう書いてあります。
+
+* これらの VC はあらかじめ作っておく
+* デプロイ時に、Identity Hub のストアに直接流し込む
+* VC の投入は専用の IdentityHubExtension でやっている
+* このデモでは発行処理（issuance flow）は使っていない
+
+という趣旨です。([GitHub][1])
+
+さらに後ろの「10.3 Credential Issuance」のところで
+
+* DCP の Credential Issuance プロトコル自体はサポートしている
+* でもデモで使う VC は「手で事前生成して配布」している
+* IdentityHubExtension.java がストアに VC を突っ込む
+* JwtSigner.java というテスト用クラスで、VC の署名付き JSON を再生成できる
+
+と書いてあります。([GitHub][1])
+
+つまり、
+
+* デモ参加者が本番さながらに「Issuer API を叩いて VC を発行する」というフローは、メインシナリオには入っていない
+* 代わりに「決め打ちの VC を、起動時に Identity Hub に流し込む」方式になっている
+
+という意味で、「静的なハードコードに近い VC 発行」です。
+
+2. じゃあ Issuance Flow はまったく無いのか
+
+完全にゼロではなくて、
+
+* DCP の Issuance Flow を試すためのエンドポイント
+* DemoCredential というおもちゃの VC を、dataspace-issuer サービスにリクエストして発行してもらう curl 例
+
+は README に載っています。([GitHub][1])
+
+ただし、これは
+
+* 「MVD の本筋（Membership/DataProcessor を使ったアクセス制御）」のためのものではなく
+* DCP Issuance プロトコルを試すおまけ的な位置づけ
+
+と見たほうがよさそうです。
+
+3. まとめると
+
+あなたの質問の意図をそのまま言い直すと、
+
+* 「MVD の VC 発行って、本物の Issuer サービスで動的発行しているのか」
+* 「それとも、事前に決め打ち JSON を用意しておいて、起動時に流し込んでいるだけか」
+
+という話ですよね。
+
+README の記述を踏まえると、
+
+* 本番っぽい Issuer フロー → ほぼ無い
+* デモで使う MembershipCredential / DataProcessorCredential → 事前に作った VC を Identity Hub にシードする方式（静的）([GitHub][1])
+* DCP Issuance → DemoCredential 用のサンプルがあるが、メインシナリオではなく「おまけ」的
+
+なので、
+
+「MVD での VC 発行は、基本的には静的に用意した VC をコード／スクリプトで流し込む形」
+
+という理解でほぼ合っています。
+
+もし「じゃあ本番に近い Issuer を自分で用意したいとき、MVD をどこまで流用できるのか？」が気になっているなら、
+
+* MVD のどのあたりが「静的」「デモ用の手抜き」なのか
+* どこを差し替えれば、外部 Issuer に切り替えられるのか
+
+を図付きで整理していきましょう。
+
+[1]: https://github.com/eclipse-edc/MinimumViableDataspace "GitHub - eclipse-edc/MinimumViableDataspace: Guidance on documentation, scripts and integration steps on using the EDC project results"
