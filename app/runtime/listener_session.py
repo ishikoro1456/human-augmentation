@@ -1040,6 +1040,7 @@ def run_listener_session(
 
     last_backchannel_play = 0.0
     last_backchannel_text = ""
+    recent_backchannel_ids: list[str] = []
     warned_no_talker = False
 
     def send_backchannel(
@@ -1103,7 +1104,7 @@ def run_listener_session(
         call_id: str,
         planned: bool,
     ) -> bool:
-        nonlocal last_backchannel_play, last_backchannel_text
+        nonlocal last_backchannel_play, last_backchannel_text, recent_backchannel_ids
         if status:
             status.set_agent_decision(
                 choice_id=selected_id,
@@ -1150,6 +1151,9 @@ def run_listener_session(
             return False
         last_backchannel_play = time.time()
         last_backchannel_text = selected_text
+        recent_backchannel_ids.append(str(selected_id))
+        if len(recent_backchannel_ids) > 20:
+            del recent_backchannel_ids[:-20]
         return True
 
     mode_norm = str(mode or "llm").strip().lower()
@@ -1406,6 +1410,16 @@ def run_listener_session(
         utterance_t_sec = int(max(0.0, now - started_at_ts))
 
         call_id = uuid.uuid4().hex[:12]
+        avoid_ids: list[str] = []
+        if recent_backchannel_ids:
+            last_id = recent_backchannel_ids[-1]
+            streak = 1
+            for prev_id in reversed(recent_backchannel_ids[:-1]):
+                if prev_id != last_id:
+                    break
+                streak += 1
+            if streak >= 2:
+                avoid_ids = [last_id]
         if trace:
             trace.write(
                 {
@@ -1417,6 +1431,7 @@ def run_listener_session(
                     "transcript_context": transcript_context,
                     "timing": dict(timing),
                     "directory_allowlist": list(directory_allowlist),
+                    "avoid_ids": list(avoid_ids),
                     "imu": imu_bundle,
                 }
             )
@@ -1432,7 +1447,7 @@ def run_listener_session(
                     "transcript_context": transcript_context,
                     "timing": timing,
                     "directory_allowlist": directory_allowlist,
-                    "avoid_ids": [],
+                    "avoid_ids": list(avoid_ids),
                     "candidates": [],
                     "selection": {},
                     "selected_id": "",
