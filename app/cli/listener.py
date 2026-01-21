@@ -50,7 +50,7 @@ def main() -> None:
     parser.add_argument("--no-speaker-playback", action="store_true")
     parser.add_argument("--speaker-playback-bin", default="ffplay")
 
-    parser.add_argument("--stt-model", default="whisper-1")
+    parser.add_argument("--stt-model", default="gpt-4o-transcribe")
     parser.add_argument("--stt-language", default="ja")
     parser.add_argument("--stt-prompt", default="")
     parser.add_argument("--stt-segments-dir", default="data/stt_segments_listener")
@@ -59,6 +59,8 @@ def main() -> None:
     parser.add_argument("--vad-pre-roll-ms", type=int, default=200)
     parser.add_argument("--vad-silence-end-ms", type=int, default=500)
     parser.add_argument("--vad-min-speech-ms", type=int, default=300)
+    parser.add_argument("--vad-start-voice-frames", type=int, default=2)
+    parser.add_argument("--vad-min-voice-ms", type=int, default=80)
     parser.add_argument("--vad-calib-sec", type=float, default=1.0)
     parser.add_argument("--vad-threshold-rms", type=int, default=0)
     parser.add_argument("--vad-threshold-mult", type=float, default=3.0)
@@ -138,6 +140,8 @@ def main() -> None:
         vad_pre_roll_ms=args.vad_pre_roll_ms,
         vad_silence_end_ms=args.vad_silence_end_ms,
         vad_min_speech_ms=args.vad_min_speech_ms,
+        vad_start_voice_frames=args.vad_start_voice_frames,
+        vad_min_voice_ms=args.vad_min_voice_ms,
         vad_calib_sec=args.vad_calib_sec,
         vad_threshold_rms=args.vad_threshold_rms,
         vad_threshold_mult=args.vad_threshold_mult,

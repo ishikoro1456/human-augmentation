@@ -7,7 +7,8 @@ import threading
 import time
 import uuid
 import base64
-import audioop
+import math
+import struct
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +48,49 @@ def _extract_agent_reason(result: Dict[str, object]) -> str:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+try:
+    import audioop as _audioop
+except Exception:
+    _audioop = None
+
+
+def _rms_s16le(raw: bytes) -> int:
+    if _audioop is not None:
+        try:
+            return int(_audioop.rms(raw, 2))
+        except Exception:
+            pass
+    if not raw:
+        return 0
+    count = int(len(raw) // 2)
+    if count <= 0:
+        return 0
+    total = 0
+    for (s,) in struct.iter_unpack("<h", raw[: count * 2]):
+        total += int(s) * int(s)
+    return int(math.sqrt(total / count))
+
+
+def _extract_transcript_text(resp: object) -> str:
+    if isinstance(resp, str):
+        return resp.strip()
+    # OpenAI python SDK returns a typed object for json response_format
+    text = getattr(resp, "text", None)
+    if text is not None:
+        return str(text).strip()
+    if isinstance(resp, dict):
+        t = resp.get("text", "")
+        return str(t).strip() if t else ""
+    return str(resp).strip()
+
+
+def _stt_response_format_for_model(model: str) -> str:
+    m = str(model or "").lower()
+    if "gpt-4o" in m and "transcribe" in m:
+        return "json"
+    return "text"
 
 
 def imu_loop(
@@ -259,7 +303,7 @@ def run_listener_session(
     deadline_guard_sec: float = 0.3,
     speaker_playback: bool = True,
     speaker_playback_bin: str = "ffplay",
-    stt_model: str = "whisper-1",
+    stt_model: str = "gpt-4o-transcribe",
     stt_language: str = "ja",
     stt_prompt: str = "",
     stt_segments_dir: Path = Path("data/stt_segments_listener"),
@@ -267,6 +311,8 @@ def run_listener_session(
     vad_pre_roll_ms: int = 200,
     vad_silence_end_ms: int = 500,
     vad_min_speech_ms: int = 300,
+    vad_start_voice_frames: int = 2,
+    vad_min_voice_ms: int = 80,
     vad_calib_sec: float = 1.0,
     vad_threshold_rms: int = 0,
     vad_threshold_mult: float = 3.0,
@@ -310,6 +356,23 @@ def run_listener_session(
                 "human_signal_min_consecutive": int(human_signal_min_consecutive),
                 "imu_axes": {"nod_axis": imu_nod_axis, "shake_axis": imu_shake_axis},
                 "gesture_calibration": bool(gesture_calibration),
+                "stt": {
+                    "model": str(stt_model),
+                    "language": str(stt_language),
+                    "prompt_enabled": bool(stt_prompt),
+                    "segments_dir": str(stt_segments_dir),
+                },
+                "vad": {
+                    "frame_ms": int(vad_frame_ms),
+                    "pre_roll_ms": int(vad_pre_roll_ms),
+                    "silence_end_ms": int(vad_silence_end_ms),
+                    "min_speech_ms": int(vad_min_speech_ms),
+                    "start_voice_frames": int(vad_start_voice_frames),
+                    "min_voice_ms": int(vad_min_voice_ms),
+                    "calib_sec": float(vad_calib_sec),
+                    "threshold_rms": int(vad_threshold_rms),
+                    "threshold_mult": float(vad_threshold_mult),
+                },
             }
         )
 
@@ -380,14 +443,14 @@ def run_listener_session(
                     params: Dict[str, object] = {
                         "model": stt_model,
                         "file": f,
-                        "response_format": "text",
+                        "response_format": _stt_response_format_for_model(stt_model),
                     }
                     if stt_language:
                         params["language"] = stt_language
                     if stt_prompt:
                         params["prompt"] = stt_prompt
-                    text = client.audio.transcriptions.create(**params)
-                text = str(text).strip()
+                    resp = client.audio.transcriptions.create(**params)
+                text = _extract_transcript_text(resp)
             except Exception as exc:
                 emit(f"文字起こしに失敗しました: {exc}")
                 if trace:
@@ -422,11 +485,15 @@ def run_listener_session(
     noise_rms = 200.0
     calib_until = time.time() + max(0.0, float(vad_calib_sec))
     speaking = False
+    start_voice_streak = 0
     silence_frames = 0
     pre_roll: list[bytes] = []
     segment_frames: list[bytes] = []
     segment_start_ms = 0
     seg_id = 0
+    seg_voice_frames = 0
+    seg_rms_sum = 0
+    seg_rms_max = 0
 
     def _recompute_vad_derived() -> tuple[int, int, int, int]:
         frame_ms = int(max(5, speaker_frame_ms))
@@ -440,7 +507,8 @@ def run_listener_session(
     def _audio_loop() -> None:
         nonlocal speaker_state_seen, speaker_sample_rate, speaker_frame_ms
         nonlocal speaker_player, speaker_player_started, speaker_player_warned
-        nonlocal noise_rms, calib_until, speaking, silence_frames, pre_roll, segment_frames, segment_start_ms, seg_id
+        nonlocal noise_rms, calib_until, speaking, start_voice_streak, silence_frames, pre_roll, segment_frames, segment_start_ms, seg_id
+        nonlocal seg_voice_frames, seg_rms_sum, seg_rms_max
 
         frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames = _recompute_vad_derived()
 
@@ -494,15 +562,16 @@ def run_listener_session(
                 frame = raw[i : i + frame_bytes]
                 i += frame_bytes
                 rms_msg = msg.get("rms")
-                rms = int(rms_msg) if (i == frame_bytes and isinstance(rms_msg, (int, float))) else int(audioop.rms(frame, 2))
+                rms = int(rms_msg) if (i == frame_bytes and isinstance(rms_msg, (int, float))) else _rms_s16le(frame)
 
                 # しきい値の推定（無音のときだけ更新）
-                if time.time() < calib_until:
-                    noise_rms = (noise_rms * 0.95) + (rms * 0.05)
-                elif not speaking:
-                    noise_rms = (noise_rms * 0.995) + (rms * 0.005)
                 thr = int(vad_threshold_rms) if int(vad_threshold_rms) > 0 else int(max(300.0, noise_rms * float(vad_threshold_mult)))
                 is_voice = rms >= thr
+                if time.time() < calib_until:
+                    if not is_voice:
+                        noise_rms = (noise_rms * 0.95) + (rms * 0.05)
+                elif (not speaking) and (not is_voice):
+                    noise_rms = (noise_rms * 0.995) + (rms * 0.005)
 
                 pre_roll.append(frame)
                 if len(pre_roll) > pre_roll_frames:
@@ -511,8 +580,18 @@ def run_listener_session(
                 now_ts = time.time()
                 if not speaking:
                     if is_voice:
+                        start_voice_streak += 1
+                    else:
+                        start_voice_streak = 0
+
+                    if start_voice_streak >= int(max(1, vad_start_voice_frames)):
                         speaking = True
+                        initial_voice_frames = int(start_voice_streak)
+                        start_voice_streak = 0
                         silence_frames = 0
+                        seg_voice_frames = int(initial_voice_frames)
+                        seg_rms_sum = int(rms)
+                        seg_rms_max = int(rms)
                         segment_frames = list(pre_roll)
                         segment_start_ms = int(msg.get("ts_ms", _now_ms()))
                         speaker_state.speaking = True
@@ -529,6 +608,9 @@ def run_listener_session(
                 # speaking 中
                 segment_frames.append(frame)
                 if is_voice:
+                    seg_voice_frames += 1
+                    seg_rms_sum += int(rms)
+                    seg_rms_max = max(int(seg_rms_max), int(rms))
                     silence_frames = 0
                     speaker_state.speaking = True
                     speaker_state.silence_ms = 0
@@ -536,6 +618,8 @@ def run_listener_session(
                     speaker_state_seen = True
                     continue
 
+                seg_rms_sum += int(rms)
+                seg_rms_max = max(int(seg_rms_max), int(rms))
                 silence_frames += 1
                 speaker_state.speaking = False
                 speaker_state.silence_ms = int(silence_frames * int(speaker_frame_ms))
@@ -550,7 +634,9 @@ def run_listener_session(
                 seg_end_ms = int(msg.get("ts_ms", _now_ms()))
                 silence_frames = 0
 
-                if len(segment_frames) >= min_speech_frames:
+                voice_ms = int(int(seg_voice_frames) * int(max(5, speaker_frame_ms)))
+                should_send = (len(segment_frames) >= min_speech_frames) and (voice_ms >= int(max(0, vad_min_voice_ms)))
+                if should_send:
                     seg_id += 1
                     stt_queue.put(
                         {
@@ -561,8 +647,40 @@ def run_listener_session(
                             "sample_rate": int(speaker_sample_rate),
                         }
                     )
+                    if trace:
+                        trace.write(
+                            {
+                                "type": "vad_segment",
+                                "segment_id": int(seg_id),
+                                "start_ts_ms": int(segment_start_ms),
+                                "end_ts_ms": int(seg_end_ms),
+                                "frames": int(len(segment_frames)),
+                                "voice_frames": int(seg_voice_frames),
+                                "voice_ms": int(voice_ms),
+                                "rms_max": int(seg_rms_max),
+                            }
+                        )
+                else:
+                    if trace:
+                        trace.write(
+                            {
+                                "type": "vad_segment_drop",
+                                "start_ts_ms": int(segment_start_ms),
+                                "end_ts_ms": int(seg_end_ms),
+                                "frames": int(len(segment_frames)),
+                                "voice_frames": int(seg_voice_frames),
+                                "voice_ms": int(voice_ms),
+                                "rms_max": int(seg_rms_max),
+                                "reason": "too_short_or_quiet",
+                                "min_speech_frames": int(min_speech_frames),
+                                "vad_min_voice_ms": int(max(0, vad_min_voice_ms)),
+                            }
+                        )
                 segment_frames = []
                 pre_roll = []
+                seg_voice_frames = 0
+                seg_rms_sum = 0
+                seg_rms_max = 0
 
     threading.Thread(target=_audio_loop, daemon=True).start()
 
