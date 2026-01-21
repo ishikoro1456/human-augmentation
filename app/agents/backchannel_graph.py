@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Literal, TypedDict
+from typing import Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
@@ -18,9 +18,6 @@ class AgentState(TypedDict):
     timing: Dict[str, object]
     directory_allowlist: List[str]
     avoid_ids: List[str]
-    # 第一段（decide）の出力
-    decision: Dict[str, object]
-    # 第二段（choose）の出力
     candidates: List[Dict[str, object]]
     selection: Dict[str, object]
     selected_id: str
@@ -42,55 +39,19 @@ def _build_candidates(
     ]
 
 
-def _build_decide_schema() -> Dict[str, object]:
-    raise RuntimeError("_build_decide_schema is deprecated; use _build_timing_schema instead.")
-
-
-def _build_timing_schema(*, allow_wait: bool, max_wait_ms: int) -> Dict[str, object]:
-    """第一段：相槌を返すか、待つか、見送るかを判断するためのスキーマ"""
-    actions = ["RESPOND_NOW", "SKIP"]
-    max_wait_ms = int(max(0, max_wait_ms))
-    if allow_wait and max_wait_ms > 0:
-        actions.insert(1, "WAIT")
-    if not allow_wait:
-        max_wait_ms = 0
-    schema: Dict[str, object] = {
+def _build_choice_schema(candidate_ids: List[str]) -> Dict[str, object]:
+    """相槌を1回の呼び出しで選ぶ（NONE を含む）"""
+    ids = ["NONE"] + list(candidate_ids)
+    return {
         "type": "object",
         "properties": {
-            "action": {
-                "type": "string",
-                "enum": actions,
-                "description": "次の行動",
-            },
-            "wait_ms": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": max_wait_ms,
-                "description": "WAIT の場合だけ、待つミリ秒（0〜max）",
-            },
+            "id": {"type": "string", "enum": ids},
             "reason": {
                 "type": "string",
                 "description": "判断理由（20文字以内）",
             },
         },
-        "required": ["action", "wait_ms", "reason"],
-        "additionalProperties": False,
-    }
-    return schema
-
-
-def _build_choose_schema(candidate_ids: List[str]) -> Dict[str, object]:
-    """第二段：相槌を選ぶためのスキーマ"""
-    return {
-        "type": "object",
-        "properties": {
-            "id": {"type": "string", "enum": candidate_ids},
-            "reason_short": {
-                "type": "string",
-                "description": "選んだ理由を一言で（10文字以内）",
-            },
-        },
-        "required": ["id", "reason_short"],
+        "required": ["id", "reason"],
         "additionalProperties": False,
     }
 
@@ -175,130 +136,22 @@ def build_backchannel_graph(
         candidates = _build_candidates(filtered)
         return {"candidates": candidates}
 
-    def decide(state: AgentState) -> Dict[str, object]:
-        """第一段：返す/待つ/見送るを判断する"""
-        motion_summary = _extract_motion_summary(state["imu"])
-        recent = state.get("recent_backchannel", {})
-        if not isinstance(recent, dict):
-            recent = {}
-
-        nod_score = motion_summary.get("nod_likelihood_score", 0)
-        has_oscillation = motion_summary.get("has_oscillation", False)
-        timing = state.get("timing", {})
-        if not isinstance(timing, dict):
-            timing = {}
-        is_boundary = bool(timing.get("is_boundary", True))
-        has_signal = bool(timing.get("has_signal", True))
-        wait_allowed = bool(timing.get("wait_allowed", False))
-        wait_budget_ms = timing.get("wait_budget_ms", 0)
-        wait_budget_ms_int = int(wait_budget_ms) if isinstance(wait_budget_ms, (int, float)) else 0
-
-        system_text = (
-            "あなたは「相槌のタイミング」を判断する役です。\n"
-            "出力は action を選んでください。\n"
-            "- RESPOND_NOW: いま返す\n"
-            "- WAIT: 区切りまで待ってから返す（使えるのは1回だけのことがあります）\n"
-            "- SKIP: 今回は見送る\n\n"
-            "【判断の考え方】\n"
-            "- 区切り(is_boundary=true)は、相槌を入れやすいです\n"
-            "- 区切りでない(is_boundary=false)ときは、割り込みになりやすいです。迷うなら WAIT を選びやすくしてください\n"
-            "- ただし、区切りでないことだけを理由に SKIP に固定しないでください\n"
-            "- 逆に、何でも RESPOND_NOW にしないでください\n"
-            "- 合図(has_signal)が無い場合は、基本は SKIP でよいです\n\n"
-            "【区切りの近さ（材料）】\n"
-            "- segment_remaining_s がある場合、短いなら WAIT を選びやすいです\n"
-            "- segment_remaining_s がある場合、長いなら RESPOND_NOW を選びやすいです\n"
-            "- speaker_speaking=true のときは、割り込みになりやすいです。迷うなら WAIT を選びやすくしてください\n"
-            "- speaker_pause_like_boundary=true のときは、区切りが近い可能性があります。WAIT を選びやすくしてください\n\n"
-            "【IMUの目安】\n"
-            "- nod_likelihood_score が 4 以上なら、頷きっぽい動きの可能性が高い\n"
-            "- has_oscillation が true なら、往復運動がある\n\n"
-            "【重要】\n"
-            "- reason は20文字以内で簡潔に\n"
-            "- wait_ms は必ず数値で入れてください（WAIT以外でも0で可）"
-        )
-
-        timing_text = json.dumps(timing, ensure_ascii=False)
-        transcript_context = str(state.get("transcript_context", "") or "")
-        transcript_context = transcript_context.strip()
-        if not transcript_context:
-            transcript_context = "文字起こしはまだありません"
-
-        prompt = (
-            "【状況】\n"
-            f"timing: {timing_text}\n"
-            f"is_boundary: {is_boundary}\n"
-            f"has_signal: {has_signal}\n"
-            f"wait_allowed: {wait_allowed} (budget_ms={wait_budget_ms_int})\n\n"
-            "【IMUの要約】\n"
-            f"nod_likelihood_score: {nod_score}\n"
-            f"has_oscillation: {has_oscillation}\n"
-            f"gesture_hint: {motion_summary.get('gesture_hint', 'other')}\n\n"
-            "【直近の相槌】\n"
-            f"{json.dumps(recent, ensure_ascii=False)}\n\n"
-            "【直近の文脈】\n"
-            f"{transcript_context}\n\n"
-            "【いまの発話】\n"
-            f"{state['utterance']}\n\n"
-            "この状況でどうしますか？"
-        )
-
-        schema = _build_timing_schema(allow_wait=wait_allowed, max_wait_ms=wait_budget_ms_int)
-        response = client.responses.create(
-            model=model,
-            input=[
-                {"role": "system", "content": system_text},
-                {"role": "user", "content": prompt},
-            ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "backchannel_decision",
-                    "strict": True,
-                    "schema": schema,
-                }
-            },
-        )
-
-        raw_text = response.output_text.strip()
-        decision: Dict[str, object] = {}
-        errors: List[str] = list(state.get("errors", []))
-        try:
-            decision = json.loads(raw_text)
-        except json.JSONDecodeError:
-            errors.append("decide_json_parse_failed")
-            decision = {"action": "SKIP", "reason": "解析失敗"}
-
-        return {"decision": decision, "errors": errors}
-
-    def route_after_decide(state: AgentState) -> Literal["choose", "wait", "skip"]:
-        """decideの結果に応じて分岐する"""
-        decision = state.get("decision", {})
-        if not isinstance(decision, dict):
-            return "skip"
-        action = str(decision.get("action", "SKIP"))
-        if action == "RESPOND_NOW":
-            return "choose"
-        if action == "WAIT":
-            return "choose"
-        return "skip"
-
     def choose(state: AgentState) -> Dict[str, object]:
-        """第二段：相槌の種類を選ぶ（should_respond: true の場合のみ）"""
+        """相槌の種類を選ぶ（NONE を含む）"""
         candidates = state["candidates"]
         candidate_ids = [c["id"] for c in candidates]
-        schema = _build_choose_schema(candidate_ids)
-
-        decision = state.get("decision", {})
-        checks = decision.get("checks", {}) if isinstance(decision, dict) else {}
-        decision_action = decision.get("action") if isinstance(decision, dict) else None
+        schema = _build_choice_schema(candidate_ids)
 
         timing = state.get("timing", {})
         if not isinstance(timing, dict):
             timing = {}
-        is_boundary = bool(timing.get("is_boundary", True))
-        planned_for_boundary = bool(decision_action == "WAIT")
-        effective_boundary = bool(is_boundary or planned_for_boundary)
+        is_boundary = bool(timing.get("is_boundary", False))
+        speaker_speaking = bool(timing.get("speaker_speaking", False))
+        speaker_pause_like_boundary = bool(timing.get("speaker_pause_like_boundary", False))
+        transcript_latest_age_s = timing.get("transcript_latest_age_s")
+        transcript_latest_age_s_text = (
+            f"{float(transcript_latest_age_s):.1f}" if isinstance(transcript_latest_age_s, (int, float)) else "-"
+        )
         seconds_since_signal = timing.get("seconds_since_signal")
         seconds_since_signal_text = (
             f"{float(seconds_since_signal):.2f}" if isinstance(seconds_since_signal, (int, float)) else "-"
@@ -308,36 +161,33 @@ def build_backchannel_graph(
             transcript_context = "文字起こしはまだありません"
 
         system_text = (
-            "あなたは相槌の種類を選ぶ役です。\n"
-            "すでに「相槌を返す」と決まっています。\n"
-            "候補の中から、文脈に最も合う相槌を1つ選んでください。\n\n"
-            "【選び方】\n"
-            "- 動きの向き（nod=肯定、shake=否定）に合わせる\n"
-            "- 区切りでないときは、短く控えめなものを強く優先する\n"
-            "- 短く控えめなものを優先する\n"
-            "- 直近で使った相槌と被らないようにする\n"
-            "- reason_short は10文字以内で書いてください"
+            "あなたは相槌の選択役です。\n"
+            "返すのに良いタイミングなら、候補から1つ選びます。\n"
+            "割り込みになりそう、内容が合わない、迷うときは NONE を選びます。\n\n"
+            "【目安】\n"
+            "- 動きの向き: nod は肯定、shake は否定\n"
+            "- 話し手が話している(speaker_speaking=true)間は、割り込みになりやすいです\n"
+            "- 区切りっぽい(speaker_pause_like_boundary=true / is_boundary=true)なら返しやすいです\n"
+            "- 文字起こしが古い(transcript_latest_age_s が大きい)ときは、無理に合わせないでください\n"
+            "- reason は20文字以内で書いてください"
         )
 
         motion_summary = _extract_motion_summary(state["imu"])
-        recent = state.get("recent_backchannel", {})
+        gesture_hint = str(motion_summary.get("gesture_hint", "other"))
 
         prompt = (
             "【状況】\n"
-            f"区切り: {is_boundary}\n"
-            f"区切りで返す予定: {planned_for_boundary}\n"
-            f"区切り(実質): {effective_boundary}\n"
-            f"合図からの秒数: {seconds_since_signal_text}\n\n"
+            f"speaker_speaking: {speaker_speaking}\n"
+            f"speaker_pause_like_boundary: {speaker_pause_like_boundary}\n"
+            f"is_boundary: {is_boundary}\n"
+            f"transcript_latest_age_s: {transcript_latest_age_s_text}\n"
+            f"seconds_since_signal: {seconds_since_signal_text}\n\n"
             "【直近の文脈】\n"
             f"{transcript_context}\n\n"
             "【候補】\n"
             f"{json.dumps(candidates, ensure_ascii=False, indent=2)}\n\n"
             "【動きの向き】\n"
-            f"{motion_summary.get('gesture_hint', 'other')}\n\n"
-            "【動きの強さ（1-5）】\n"
-            f"{motion_summary.get('intensity_level_1to5', 0)}\n\n"
-            "【直近の相槌】\n"
-            f"{json.dumps(recent, ensure_ascii=False)}\n\n"
+            f"{gesture_hint}\n\n"
             "【現在の発話】\n"
             f"{state['utterance']}\n\n"
             "どの相槌を選びますか？"
@@ -368,32 +218,6 @@ def build_backchannel_graph(
             errors.append("choose_json_parse_failed")
         return {"selection": selection, "errors": errors}
 
-    def skip(state: AgentState) -> Dict[str, object]:
-        """相槌を返さない場合"""
-        decision = state.get("decision", {})
-        reason = ""
-        if isinstance(decision, dict):
-            reason = str(decision.get("reason", ""))
-        return {
-            "selection": {"id": "NONE", "reason": reason},
-            "selected_id": "NONE",
-        }
-
-    def wait(state: AgentState) -> Dict[str, object]:
-        """少し待つ場合"""
-        decision = state.get("decision", {})
-        reason = ""
-        wait_ms = 0
-        if isinstance(decision, dict):
-            reason = str(decision.get("reason", ""))
-            wm = decision.get("wait_ms", 0)
-            if isinstance(wm, (int, float)):
-                wait_ms = int(wm)
-        return {
-            "selection": {"id": "WAIT", "reason": reason, "wait_ms": wait_ms},
-            "selected_id": "WAIT",
-        }
-
     def resolve(state: AgentState) -> Dict[str, object]:
         """選ばれたIDを検証する"""
         selection = state.get("selection", {})
@@ -401,38 +225,23 @@ def build_backchannel_graph(
             return {"selected_id": "NONE"}
 
         selected_id = str(selection.get("id", ""))
-        if selected_id in ("NONE", "WAIT"):
+        if selected_id == "NONE":
             return {"selected_id": selected_id}
 
         candidate_ids = {c["id"] for c in state.get("candidates", [])}
         if selected_id not in candidate_ids:
             selected_id = _fallback_id(items)
 
-        # decisionの情報をselectionに追加
-        decision = state.get("decision", {})
-        if isinstance(decision, dict):
-            selection["decision_reason"] = decision.get("reason", "")
-
         return {"selected_id": selected_id, "selection": selection}
 
     graph = StateGraph(AgentState)
     graph.add_node("prepare", prepare)
-    graph.add_node("decide", decide)
     graph.add_node("choose", choose)
-    graph.add_node("wait", wait)
-    graph.add_node("skip", skip)
     graph.add_node("resolve", resolve)
 
     graph.add_edge(START, "prepare")
-    graph.add_edge("prepare", "decide")
-    graph.add_conditional_edges(
-        "decide",
-        route_after_decide,
-        {"choose": "choose", "wait": "wait", "skip": "skip"},
-    )
+    graph.add_edge("prepare", "choose")
     graph.add_edge("choose", "resolve")
-    graph.add_edge("wait", END)
-    graph.add_edge("skip", END)
     graph.add_edge("resolve", END)
 
     return graph

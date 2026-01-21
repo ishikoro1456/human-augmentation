@@ -320,12 +320,12 @@ def run_listener_session(
     debug_imu: bool = False,
     debug_agent: bool = False,
     debug_signal: bool = False,
-    agent_interval_sec: float = 1.0,
-    backchannel_cooldown_sec: float = 2.0,
-    calibration_still_sec: float = 10.0,
-    calibration_active_sec: float = 20.0,
+    agent_interval_sec: float = 0.0,
+    backchannel_cooldown_sec: float = 0.0,
+    calibration_still_sec: float = 0.0,
+    calibration_active_sec: float = 10.0,
     calibration_start_delay_sec: float = 3.0,
-    calibration_between_sec: float = 3.0,
+    calibration_between_sec: float = 0.0,
     calibration_wait_for_imu_sec: float = 15.0,
     human_signal_gyro_sigma: float = 3.0,
     human_signal_abs_threshold: float = 8.0,
@@ -334,7 +334,7 @@ def run_listener_session(
     human_signal_hold_sec: float = 3.0,
     imu_nod_axis: str = "gy",
     imu_shake_axis: str = "gz",
-    gesture_calibration: bool = False,
+    gesture_calibration: bool = True,
     gesture_weak_sec: float = 2.0,
     gesture_strong_sec: float = 2.0,
     gesture_start_delay_sec: float = 2.0,
@@ -1038,11 +1038,8 @@ def run_listener_session(
     transcript = LiveTranscriptBuffer(max_lines=300)
     last_pause_like_boundary = False
 
-    last_agent_call = 0.0
     last_backchannel_play = 0.0
     last_backchannel_text = ""
-    recent_ids: list[str] = []
-    recent_texts: list[str] = []
     warned_no_talker = False
 
     def send_backchannel(
@@ -1106,7 +1103,7 @@ def run_listener_session(
         call_id: str,
         planned: bool,
     ) -> bool:
-        nonlocal last_backchannel_play, last_backchannel_text, recent_ids, recent_texts
+        nonlocal last_backchannel_play, last_backchannel_text
         if status:
             status.set_agent_decision(
                 choice_id=selected_id,
@@ -1130,7 +1127,7 @@ def run_listener_session(
         )
         played_local = False
         if local_backchannel_play and audio_path is not None:
-            played_local = player.play_effect(audio_path)
+            played_local = player.play_effect(audio_path, interrupt=True)
         if trace:
             trace.write(
                 {
@@ -1147,23 +1144,12 @@ def run_listener_session(
             )
         if status and audio_path is not None:
             status.set_backchannel_playback(path=audio_path, played=(sent or played_local))
-        if local_backchannel_play and (not played_local):
-            emit("再生中の音があるので、相槌の再生をスキップします。")
         if local_backchannel_play and played_local and ((not status) or debug_agent):
             emit(f"再生(ローカル): {audio_path}")
         if (not sent) and (not played_local):
             return False
         last_backchannel_play = time.time()
         last_backchannel_text = selected_text
-        recent_ids.append(selected_id)
-        recent_texts.append(selected_text)
-        if len(recent_ids) > 12:
-            recent_ids = recent_ids[-12:]
-        if len(recent_texts) > 12:
-            recent_texts = recent_texts[-12:]
-        if local_backchannel_play:
-            while player.is_effect_playing():
-                time.sleep(0.02)
         return True
 
     mode_norm = str(mode or "llm").strip().lower()
@@ -1268,10 +1254,6 @@ def run_listener_session(
                     emit("見つかりません。help で一覧を見てください。")
                     continue
 
-                if time.time() - last_backchannel_play < backchannel_cooldown_sec:
-                    emit("クールダウン中です。少し待ってください。")
-                    continue
-
                 ap = find_audio_file(audio_dir, item) if local_backchannel_play else None
                 play_backchannel(
                     selected_id=item.id,
@@ -1286,8 +1268,6 @@ def run_listener_session(
         threading.Thread(target=_human_input_loop, daemon=True).start()
     else:
         emit("モード: llm（IMU + モデルで相槌を決めます）")
-
-    pending: Dict[str, object] | None = None
 
     while True:
         boundary_event = False
@@ -1350,168 +1330,25 @@ def run_listener_session(
         except queue.Empty:
             pass
 
-        if latest_signal_event is not None:
-            sig = latest_signal_event.get("signal", {})
-            ts = latest_signal_event.get("ts")
-            if isinstance(sig, dict) and isinstance(ts, (int, float)):
-                hint = str(sig.get("gesture_hint", "other"))
-                pending = {
-                    "signal_ts": float(ts),
-                    "deadline_ts": float(ts) + float(human_signal_hold_sec),
-                    "early_call_ts": float(ts) + float(early_call_delay_sec),
-                    "early_called": False,
-                    "wait_used": False,
-                    "planned": None,
-                    "planned_after_ts": 0.0,
-                    "planned_armed": False,
-                    "planned_armed_ts": 0.0,
-                    "signal": dict(sig),
-                }
-                if trace:
-                    trace.write(
-                        {
-                            "type": "pending_set",
-                            "hint": hint,
-                            "signal_ts": round(float(ts), 3),
-                            "deadline_ts": round(float(pending["deadline_ts"]), 3),
-                            "early_call_ts": round(float(pending["early_call_ts"]), 3),
-                            "signal": dict(sig),
-                        }
-                    )
-                if debug_signal or debug_agent:
-                    emit(f"保留: {hint} (区切り待ち)")
-
-        # planned を boundary で armed にする
-        if pending is not None and (boundary_event or speaker_pause_like_boundary):
-            if pending.get("planned") is not None and not bool(pending.get("planned_armed", False)):
-                pending["planned_armed"] = True
-                pending["planned_armed_ts"] = time.time()
-                if trace:
-                    trace.write(
-                        {
-                            "type": "planned_armed",
-                            "signal_ts": pending.get("signal_ts"),
-                            "armed_ts": round(float(pending["planned_armed_ts"]), 3),
-                            "planned": pending.get("planned"),
-                        }
-                    )
-
-        # planned が armed なら再生する
-        if pending is not None and bool(pending.get("planned_armed", False)) and isinstance(pending.get("planned"), dict):
-            if player.is_effect_playing():
-                time.sleep(0.01)
-                continue
-            if now - last_backchannel_play < backchannel_cooldown_sec:
-                time.sleep(0.01)
-                continue
-            planned = pending.get("planned")
-            planned_after_ts = pending.get("planned_after_ts", 0.0)
-            if isinstance(planned_after_ts, (int, float)) and now < float(planned_after_ts):
-                time.sleep(0.01)
-                continue
-            pid = planned.get("selected_id")
-            ptext = planned.get("selected_text")
-            paudio = planned.get("audio_path")
-            preason = planned.get("reason", "")
-            plat = planned.get("latency_ms", 0)
-            pcall = planned.get("call_id", "")
-            if (
-                isinstance(pid, str)
-                and isinstance(ptext, str)
-                and isinstance(pcall, str)
-                and isinstance(plat, int)
-            ):
-                audio_path = Path(paudio) if isinstance(paudio, str) and paudio else None
-                played = play_backchannel(
-                    selected_id=pid,
-                    selected_text=ptext,
-                    audio_path=audio_path,
-                    reason=str(preason),
-                    latency_ms=int(plat),
-                    call_id=pcall,
-                    planned=True,
-                )
-                if played:
-                    pending = None
-                continue
-            pending = None
-            continue
-
-        # 期限切れで保留を落とす（planned 再生を優先する）
-        if pending is not None:
-            deadline_ts = pending.get("deadline_ts")
-            if isinstance(deadline_ts, (int, float)) and now > float(deadline_ts):
-                if debug_signal or debug_agent:
-                    emit("保留: 期限切れで見送ります")
-                if trace:
-                    trace.write(
-                        {
-                            "type": "pending_expired",
-                            "signal_ts": pending.get("signal_ts"),
-                            "deadline_ts": pending.get("deadline_ts"),
-                            "early_called": bool(pending.get("early_called", False)),
-                            "wait_used": bool(pending.get("wait_used", False)),
-                            "planned": pending.get("planned"),
-                            "planned_armed": bool(pending.get("planned_armed", False)),
-                        }
-                    )
-                pending = None
-
-        # 呼び出し要否
-        if pending is None:
+        # IMUの合図が来たら、すぐに1回だけ判断する
+        if latest_signal_event is None:
             time.sleep(0.01)
             continue
 
-        decision_point = ""
-        is_boundary = False
-        has_signal = True
-        seconds_since_signal = None
-        wait_allowed = False
-        wait_budget_ms = 0
-
-        signal_ts = pending.get("signal_ts")
-        if isinstance(signal_ts, (int, float)):
-            seconds_since_signal = max(0.0, now - float(signal_ts))
-
-        if boundary_event:
-            decision_point = "boundary"
-            is_boundary = True
-        else:
-            early_called = bool(pending.get("early_called", False))
-            early_call_ts = pending.get("early_call_ts")
-            mark_pending_key: str | None = None
-            if (not early_called) and isinstance(early_call_ts, (int, float)) and now >= float(early_call_ts):
-                decision_point = "signal_early"
-                mark_pending_key = "early_called"
-            else:
-                continue
-
-            if mark_pending_key and pending is not None:
-                pending[mark_pending_key] = True
-
-        if player.is_effect_playing():
-            time.sleep(0.01)
-            continue
-        if now - last_backchannel_play < backchannel_cooldown_sec:
-            time.sleep(0.01)
-            continue
-        if now - last_agent_call < agent_interval_sec:
+        sig = latest_signal_event.get("signal")
+        ts = latest_signal_event.get("ts")
+        if not isinstance(sig, dict) or not isinstance(ts, (int, float)):
             time.sleep(0.01)
             continue
 
-        deadline_ts = pending.get("deadline_ts")
-        if isinstance(deadline_ts, (int, float)):
-            remaining_ms = int(max(0.0, float(deadline_ts) - now) * 1000)
-            wait_budget_ms = remaining_ms
-            wait_used = bool(pending.get("wait_used", False))
-            wait_allowed = (not wait_used) and (decision_point == "signal_early") and remaining_ms > 0
+        seconds_since_signal = max(0.0, now - float(ts))
 
         # IMUの要約
         imu_bundle = imu_buffer.build_bundle(
             now=now,
             raw_window_sec=2.0,
             raw_max_points=8,
-            stats_windows_sec=[1.0, 5.0, 30.0, 120.0, 600.0],
+            stats_windows_sec=[1.0, 5.0],
         )
         if imu_calibration is not None:
             imu_bundle["calibration"] = imu_calibration.to_dict()
@@ -1525,21 +1362,14 @@ def run_listener_session(
                 "shake_axis": imu_shake_axis_effective,
             }
 
-        # 合図は pending の signal を優先
-        human_signal = dict(pending.get("signal", {}) if isinstance(pending.get("signal"), dict) else {})
+        human_signal = dict(sig)
         human_signal["present"] = True
-        human_signal["hold_sec"] = float(human_signal_hold_sec)
-        if seconds_since_signal is not None:
-            human_signal["age_since_signal_s"] = round(float(seconds_since_signal), 3)
+        human_signal["age_since_signal_s"] = round(float(seconds_since_signal), 3)
         imu_bundle["human_signal"] = human_signal
 
         if debug_signal or debug_agent:
             reason = str(human_signal.get("reason", ""))
-            age_s = human_signal.get("age_since_signal_s")
-            if isinstance(age_s, (int, float)):
-                emit(f"IMUサイン: {reason} (age={float(age_s):.2f}s)")
-            else:
-                emit(f"IMUサイン: {reason}")
+            emit(f"IMUサイン: {reason} (age={float(seconds_since_signal):.2f}s)")
 
         directory_allowlist: list[str] = []
         hint = human_signal.get("gesture_hint")
@@ -1549,41 +1379,30 @@ def run_listener_session(
             elif hint == "shake":
                 directory_allowlist = ["negative"]
 
-        avoid_ids = recent_ids[-2:] if recent_ids else []
-
         transcript_context = transcript.context(max_lines=context_max_lines).strip()
         if not transcript_context:
             transcript_context = "文字起こしはまだありません"
 
+        latest_received_ts = transcript.latest_received_ts()
+        transcript_latest_age_s: float | None = None
+        if latest_received_ts is not None:
+            transcript_latest_age_s = max(0.0, now - float(latest_received_ts))
+
         timing: Dict[str, object] = {
-            "is_boundary": bool(is_boundary),
-            "has_signal": bool(has_signal),
-            "decision_point": decision_point,
-            "seconds_since_signal": None if seconds_since_signal is None else round(float(seconds_since_signal), 3),
-            "deadline_sec": float(human_signal_hold_sec),
-            "wait_allowed": bool(wait_allowed),
-            "wait_budget_ms": int(wait_budget_ms),
+            "is_boundary": bool(boundary_event),
+            "seconds_since_signal": round(float(seconds_since_signal), 3),
             "speaker_speaking": bool(speaker_state.speaking),
             "speaker_silence_ms": int(speaker_silence_ms_live),
             "speaker_pause_like_boundary": bool(speaker_pause_like_boundary),
             "boundary_silence_ms": int(max(0, boundary_silence_ms)),
+            "transcript_latest_age_s": None
+            if transcript_latest_age_s is None
+            else round(float(transcript_latest_age_s), 3),
         }
 
-        audio_state: Dict[str, object] = {
-            "speaker_speaking": bool(speaker_state.speaking),
-            "backchannel_playing": player.is_effect_playing(),
-            "decision_point": decision_point,
-            "is_boundary": bool(is_boundary),
-            "speaker_pause_like_boundary": bool(speaker_pause_like_boundary),
-        }
-        recent_backchannel: Dict[str, object] = {
-            "seconds_ago": None if last_backchannel_play == 0.0 else round(now - last_backchannel_play, 3),
-            "text": last_backchannel_text,
-            "history_ids": recent_ids[-6:],
-            "history_texts": recent_texts[-6:],
-        }
-
-        utterance = boundary_text or transcript.latest_text() or ""
+        utterance = str(boundary_text or "").strip()
+        if (not utterance) and transcript_latest_age_s is not None and transcript_latest_age_s <= 2.0:
+            utterance = transcript.latest_text() or ""
         utterance_t_sec = int(max(0.0, now - started_at_ts))
 
         call_id = uuid.uuid4().hex[:12]
@@ -1597,43 +1416,41 @@ def run_listener_session(
                     "utterance_t_sec": utterance_t_sec,
                     "transcript_context": transcript_context,
                     "timing": dict(timing),
-                    "audio_state": dict(audio_state),
-                    "recent_backchannel": dict(recent_backchannel),
                     "directory_allowlist": list(directory_allowlist),
-                    "avoid_ids": list(avoid_ids),
                     "imu": imu_bundle,
                 }
             )
 
         t0 = time.time()
-        result = graph.invoke(
-            {
-                "utterance": utterance,
-                "imu": imu_bundle,
-                "imu_text": json.dumps(imu_bundle, ensure_ascii=False),
-                "audio_state": audio_state,
-                "recent_backchannel": recent_backchannel,
-                "utterance_t_sec": utterance_t_sec,
-                "transcript_context": transcript_context,
-                "timing": timing,
-                "directory_allowlist": directory_allowlist,
-                "avoid_ids": avoid_ids,
-                "candidates": [],
-                "selection": {},
-                "selected_id": "",
-                "errors": [],
-            },
-            config={"configurable": {"thread_id": thread_id}},
-        )
+        try:
+            result = graph.invoke(
+                {
+                    "utterance": utterance,
+                    "imu": imu_bundle,
+                    "imu_text": json.dumps(imu_bundle, ensure_ascii=False),
+                    "utterance_t_sec": utterance_t_sec,
+                    "transcript_context": transcript_context,
+                    "timing": timing,
+                    "directory_allowlist": directory_allowlist,
+                    "avoid_ids": [],
+                    "candidates": [],
+                    "selection": {},
+                    "selected_id": "",
+                    "errors": [],
+                },
+                config={"configurable": {"thread_id": thread_id}},
+            )
+        except Exception as exc:
+            emit(f"相槌の判断でエラーが起きました: {exc}")
+            if trace:
+                trace.write({"type": "agent_error", "call_id": call_id, "error": str(exc)})
+            time.sleep(0.01)
+            continue
+
         latency_ms = int(round((time.time() - t0) * 1000))
-        last_agent_call = time.time()
 
         selected_id = str(result.get("selected_id", ""))
         reason = _extract_agent_reason(result)
-        decision_action = ""
-        dec = result.get("decision", {})
-        if isinstance(dec, dict):
-            decision_action = str(dec.get("action", "")) if dec.get("action") is not None else ""
         if trace:
             trace.write(
                 {
@@ -1643,7 +1460,6 @@ def run_listener_session(
                     "latency_ms": int(latency_ms),
                     "selected_id": selected_id,
                     "reason": reason,
-                    "decision": result.get("decision", {}),
                     "selection": result.get("selection", {}),
                     "errors": result.get("errors", []),
                 }
@@ -1652,16 +1468,22 @@ def run_listener_session(
         if selected_id == "NONE":
             if status:
                 status.clear_backchannel_playback()
-                status.set_agent_decision(choice_id="NONE", choice_text="", reason=reason, latency_ms=latency_ms, ts=time.time())
+                status.set_agent_decision(
+                    choice_id="NONE",
+                    choice_text="",
+                    reason=reason,
+                    latency_ms=latency_ms,
+                    ts=time.time(),
+                )
             if debug_agent:
                 emit(f"選択: NONE ({reason})" if reason else "選択: NONE")
-            pending = None
+            time.sleep(0.01)
             continue
 
         selected_item = next((item for item in items if item.id == selected_id), None)
         if not selected_item:
             emit("相槌の選択に失敗しました。")
-            pending = None
+            time.sleep(0.01)
             continue
 
         audio_path: Path | None = None
@@ -1670,56 +1492,7 @@ def run_listener_session(
             if not audio_path:
                 emit("音声ファイルが見つからないので、ローカル再生はできません。")
 
-        if decision_action == "WAIT" and pending is not None:
-            wait_ms = 0
-            if isinstance(dec, dict):
-                wm = dec.get("wait_ms", 0)
-                if isinstance(wm, (int, float)):
-                    wait_ms = int(wm)
-            pending["wait_used"] = True
-            pending["planned"] = {
-                "call_id": call_id,
-                "selected_id": selected_item.id,
-                "selected_text": selected_item.text,
-                "audio_path": "" if audio_path is None else str(audio_path),
-                "reason": reason,
-                "latency_ms": int(latency_ms),
-                "planned_at_ts": round(time.time(), 3),
-                "wait_ms": int(wait_ms),
-            }
-            pending["planned_after_ts"] = time.time() + max(0.0, float(wait_ms) / 1000.0)
-            # モデルが遅いときでも、planned をすぐ期限切れにしないための猶予
-            try:
-                cur_deadline = float(pending.get("deadline_ts", 0.0))
-            except Exception:
-                cur_deadline = 0.0
-            pending["deadline_ts"] = max(cur_deadline, float(pending["planned_after_ts"]) + 1.0)
-            pending["planned_armed"] = False
-            pending["planned_armed_ts"] = 0.0
-            if trace:
-                trace.write(
-                    {
-                        "type": "planned_set",
-                        "call_id": call_id,
-                        "thread_id": thread_id,
-                        "signal_ts": pending.get("signal_ts"),
-                        "planned": pending.get("planned"),
-                    }
-                )
-            if status:
-                status.clear_backchannel_playback()
-                status.set_agent_decision(
-                    choice_id="WAIT",
-                    choice_text=selected_item.text,
-                    reason=("区切り待ち: " + reason) if reason else "区切り待ち",
-                    latency_ms=latency_ms,
-                    ts=time.time(),
-                )
-            if debug_agent:
-                emit(f"選択: WAIT (区切りで返す) {selected_item.text} {reason}".strip())
-            continue
-
-        played = play_backchannel(
+        play_backchannel(
             selected_id=selected_item.id,
             selected_text=selected_item.text,
             audio_path=audio_path,
@@ -1728,5 +1501,5 @@ def run_listener_session(
             call_id=call_id,
             planned=False,
         )
-        if played:
-            pending = None
+        time.sleep(0.01)
+        continue

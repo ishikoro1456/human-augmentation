@@ -44,8 +44,8 @@ def main() -> None:
     parser.add_argument("--debug-agent", action="store_true")
     parser.add_argument("--debug-signal", action="store_true")
 
-    parser.add_argument("--agent-interval-sec", type=float, default=1.0)
-    parser.add_argument("--backchannel-cooldown-sec", type=float, default=2.0)
+    parser.add_argument("--agent-interval-sec", type=float, default=0.0)
+    parser.add_argument("--backchannel-cooldown-sec", type=float, default=0.0)
 
     parser.add_argument("--no-speaker-playback", action="store_true")
     parser.add_argument("--speaker-playback-bin", default="ffplay")
@@ -74,13 +74,13 @@ def main() -> None:
     parser.add_argument("--no-send-backchannel-to-talker", action="store_true")
     parser.add_argument("--local-backchannel-play", action="store_true")
 
-    parser.add_argument("--calibration-still-sec", type=float, default=10.0)
+    parser.add_argument("--calibration-still-sec", type=float, default=0.0)
     parser.add_argument("--calibration-start-delay-sec", type=float, default=3.0)
-    parser.add_argument("--calibration-active-sec", type=float, default=20.0)
-    parser.add_argument("--calibration-between-sec", type=float, default=3.0)
+    parser.add_argument("--calibration-active-sec", type=float, default=10.0)
+    parser.add_argument("--calibration-between-sec", type=float, default=0.0)
     parser.add_argument("--calibration-wait-for-imu-sec", type=float, default=15.0)
 
-    parser.add_argument("--gesture-calibration", action="store_true")
+    parser.add_argument("--gesture-calibration", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--gesture-weak-sec", type=float, default=2.0)
     parser.add_argument("--gesture-strong-sec", type=float, default=2.0)
     parser.add_argument("--gesture-start-delay-sec", type=float, default=2.0)
