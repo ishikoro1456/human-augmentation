@@ -157,6 +157,15 @@ def human_signal_loop(
         hint = signal.get("gesture_hint")
         eligible = bool(present) and isinstance(hint, str) and hint in ("nod", "shake")
 
+        recent_counts_30s: Dict[str, int] = {}
+        recent_rate_per_min_30s: Dict[str, float] = {}
+        try:
+            recent_counts_30s = store.count_by_gesture(max_age_s=30.0, now=now)
+            recent_rate_per_min_30s = {k: round(float(v) * 2.0, 2) for k, v in recent_counts_30s.items()}
+        except Exception:
+            recent_counts_30s = {}
+            recent_rate_per_min_30s = {}
+
         if trace and (
             (now - last_trace_ts) >= float(max(0.2, trace_interval_sec))
             or present != last_trace_present
@@ -183,6 +192,8 @@ def human_signal_loop(
                     "dominant_axis": signal.get("dominant_axis"),
                     "axis_map": signal.get("axis_map"),
                     "motion_features": signal.get("motion_features"),
+                    "gesture_counts_30s": recent_counts_30s,
+                    "gesture_rate_per_min_30s": recent_rate_per_min_30s,
                 },
                 ts=now,
             )
@@ -329,7 +340,7 @@ def run_listener_session(
     gesture_start_delay_sec: float = 2.0,
     gesture_rest_sec: float = 2.0,
     auto_imu_axis_map: bool = True,
-    boundary_silence_ms: int = 350,
+    boundary_silence_ms: int = 150,
     context_max_lines: int = 10,
     early_call_delay_sec: float = 0.2,
     speaker_playback: bool = True,

@@ -32,6 +32,22 @@ def _sample_rate_hz(samples: List[ImuSample]) -> Optional[float]:
     return (len(samples) - 1) / dt
 
 
+def _count_sign_changes(values: List[float]) -> int:
+    last_sign = 0
+    changes = 0
+    for v in values:
+        if v > 0:
+            sign = 1
+        elif v < 0:
+            sign = -1
+        else:
+            continue
+        if last_sign != 0 and sign != last_sign:
+            changes += 1
+        last_sign = sign
+    return changes
+
+
 @dataclass(frozen=True)
 class CalibrationPhase:
     name: str
@@ -42,6 +58,8 @@ class CalibrationPhase:
     sample_rate_hz: Optional[float]
     gyro_mag: Dict[str, float]
     acc_mag: Dict[str, float]
+    axis_sign_changes: Dict[str, int]
+    axis_cycles_hz: Dict[str, float]
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -53,6 +71,8 @@ class CalibrationPhase:
             "sample_rate_hz": None if self.sample_rate_hz is None else round(self.sample_rate_hz, 2),
             "gyro_mag": {k: round(v, 4) for k, v in self.gyro_mag.items()},
             "acc_mag": {k: round(v, 4) for k, v in self.acc_mag.items()},
+            "axis_sign_changes": {k: int(v) for k, v in self.axis_sign_changes.items()},
+            "axis_cycles_hz": {k: round(float(v), 3) for k, v in self.axis_cycles_hz.items()},
         }
 
     def summary(self) -> str:
@@ -133,15 +153,28 @@ def _phase_from_samples(
 ) -> CalibrationPhase:
     gyro_mag = [math.sqrt(s.gx * s.gx + s.gy * s.gy + s.gz * s.gz) for s in samples]
     acc_mag = [math.sqrt(s.ax * s.ax + s.ay * s.ay + s.az * s.az) for s in samples]
+    duration_s = max(0.0, end_ts - start_ts)
+    gx = [s.gx for s in samples]
+    gy = [s.gy for s in samples]
+    gz = [s.gz for s in samples]
+    axis_sc = {"gx": _count_sign_changes(gx), "gy": _count_sign_changes(gy), "gz": _count_sign_changes(gz)}
+    axis_cycles_hz: Dict[str, float] = {}
+    for axis, sc in axis_sc.items():
+        if duration_s <= 0:
+            axis_cycles_hz[axis] = 0.0
+        else:
+            axis_cycles_hz[axis] = float(sc) / 2.0 / float(duration_s)
     return CalibrationPhase(
         name=name,
         start_ts=start_ts,
         end_ts=end_ts,
-        duration_s=max(0.0, end_ts - start_ts),
+        duration_s=duration_s,
         count=len(samples),
         sample_rate_hz=_sample_rate_hz(samples),
         gyro_mag=_stats(gyro_mag),
         acc_mag=_stats(acc_mag),
+        axis_sign_changes=axis_sc,
+        axis_cycles_hz=axis_cycles_hz,
     )
 
 

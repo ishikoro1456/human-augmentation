@@ -29,6 +29,7 @@ dist/
 
 data/tts_cache/
 data/stt_segments_listener/
+data/logs/
 
 # UV
 .uv/

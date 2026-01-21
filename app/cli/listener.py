@@ -96,7 +96,7 @@ def main() -> None:
     parser.add_argument("--imu-nod-axis", choices=["gx", "gy", "gz"], default="gy")
     parser.add_argument("--imu-shake-axis", choices=["gx", "gy", "gz"], default="gz")
 
-    parser.add_argument("--boundary-silence-ms", type=int, default=350)
+    parser.add_argument("--boundary-silence-ms", type=int, default=150)
     parser.add_argument("--context-max-lines", type=int, default=10)
     parser.add_argument("--early-call-delay-sec", type=float, default=0.2)
 

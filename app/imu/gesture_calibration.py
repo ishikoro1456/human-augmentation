@@ -30,6 +30,22 @@ def _max(values: List[float]) -> Optional[float]:
     return float(max(values))
 
 
+def _count_sign_changes(values: List[float]) -> int:
+    last_sign = 0
+    changes = 0
+    for v in values:
+        if v > 0:
+            sign = 1
+        elif v < 0:
+            sign = -1
+        else:
+            continue
+        if last_sign != 0 and sign != last_sign:
+            changes += 1
+        last_sign = sign
+    return changes
+
+
 @dataclass(frozen=True)
 class GestureExample:
     name: str
@@ -44,6 +60,8 @@ class GestureExample:
     gyro_mag_mean: Optional[float]
     gyro_mag_max: Optional[float]
     dominant_axis: str
+    axis_sign_changes: Dict[str, int]
+    axis_cycles_hz: Dict[str, float]
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -59,13 +77,17 @@ class GestureExample:
             "gyro_mag_mean": None if self.gyro_mag_mean is None else round(self.gyro_mag_mean, 3),
             "gyro_mag_max": None if self.gyro_mag_max is None else round(self.gyro_mag_max, 3),
             "dominant_axis": self.dominant_axis,
+            "axis_sign_changes": {k: int(v) for k, v in self.axis_sign_changes.items()},
+            "axis_cycles_hz": {k: round(float(v), 3) for k, v in self.axis_cycles_hz.items()},
         }
 
     def summary(self) -> str:
         rate_s = "-" if self.sample_rate_hz is None else f"{self.sample_rate_hz:.1f}Hz"
         gm_s = "-" if self.gyro_mag_mean is None else f"{self.gyro_mag_mean:.2f}"
         gmx_s = "-" if self.gyro_mag_max is None else f"{self.gyro_mag_max:.2f}"
-        return f"axis={self.dominant_axis}, rate={rate_s}, gyro_mean={gm_s}, gyro_max={gmx_s}"
+        freq = self.axis_cycles_hz.get(self.dominant_axis)
+        freq_s = "-" if freq is None else f"{float(freq):.2f}Hz"
+        return f"axis={self.dominant_axis}, freq={freq_s}, rate={rate_s}, gyro_mean={gm_s}, gyro_max={gmx_s}"
 
 
 @dataclass(frozen=True)
@@ -119,12 +141,23 @@ def _example_from_samples(
     }
     dominant_axis = max(axis_abs_mean, key=lambda k: axis_abs_mean[k]) if axis_abs_mean else "-"
     gyro_mag = [math.sqrt(s.gx * s.gx + s.gy * s.gy + s.gz * s.gz) for s in samples]
+    duration_s = max(0.0, end_ts - start_ts)
+    gx = [s.gx for s in samples]
+    gy = [s.gy for s in samples]
+    gz = [s.gz for s in samples]
+    axis_sc = {"gx": _count_sign_changes(gx), "gy": _count_sign_changes(gy), "gz": _count_sign_changes(gz)}
+    axis_cycles_hz: Dict[str, float] = {}
+    for axis, sc in axis_sc.items():
+        if duration_s <= 0:
+            axis_cycles_hz[axis] = 0.0
+        else:
+            axis_cycles_hz[axis] = float(sc) / 2.0 / float(duration_s)
     return GestureExample(
         name=name,
         instruction=instruction,
         start_ts=start_ts,
         end_ts=end_ts,
-        duration_s=max(0.0, end_ts - start_ts),
+        duration_s=duration_s,
         count=len(samples),
         sample_rate_hz=_sample_rate_hz(samples),
         axis_abs_mean=axis_abs_mean,
@@ -132,6 +165,8 @@ def _example_from_samples(
         gyro_mag_mean=_mean(gyro_mag),
         gyro_mag_max=_max(gyro_mag),
         dominant_axis=dominant_axis,
+        axis_sign_changes=axis_sc,
+        axis_cycles_hz=axis_cycles_hz,
     )
 
 
