@@ -50,18 +50,7 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-try:
-    import audioop as _audioop
-except Exception:
-    _audioop = None
-
-
 def _rms_s16le(raw: bytes) -> int:
-    if _audioop is not None:
-        try:
-            return int(_audioop.rms(raw, 2))
-        except Exception:
-            pass
     if not raw:
         return 0
     count = int(len(raw) // 2)
