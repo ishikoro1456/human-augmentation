@@ -131,6 +131,24 @@ def build_backchannel_graph(
             filtered = [it for it in filtered if it.directory in allow]
         if avoid_ids:
             filtered = [it for it in filtered if it.id not in avoid_ids]
+
+        timing = state.get("timing", {})
+        if not isinstance(timing, dict):
+            timing = {}
+        speaker_speaking = bool(timing.get("speaker_speaking", False))
+        speaker_pause_like_boundary = bool(timing.get("speaker_pause_like_boundary", False))
+        transcript_latest_age_s = timing.get("transcript_latest_age_s")
+        transcript_age = float(transcript_latest_age_s) if isinstance(transcript_latest_age_s, (int, float)) else None
+        stale_context_but_safe = (
+            (not speaker_speaking)
+            and speaker_pause_like_boundary
+            and (transcript_age is not None)
+            and (transcript_age >= 2.0)
+        )
+        if stale_context_but_safe:
+            safe = [it for it in filtered if it.strength <= 3 and len(it.text) <= 4]
+            if safe:
+                filtered = safe
         if not filtered:
             filtered = items
         candidates = _build_candidates(filtered)
@@ -168,7 +186,8 @@ def build_backchannel_graph(
             "- 動きの向き: nod は肯定、shake は否定\n"
             "- 話し手が話している(speaker_speaking=true)間は、割り込みになりやすいです\n"
             "- 区切りっぽい(speaker_pause_like_boundary=true / is_boundary=true)なら返しやすいです\n"
-            "- 文字起こしが古い(transcript_latest_age_s が大きい)ときは、無理に合わせないでください\n"
+            "- 文字起こしが古い(transcript_latest_age_s が大きい)ときでも、話し手が話していない(speaker_speaking=false)で区切りっぽいなら、短い相槌は返してよいです\n"
+            "- その場合は、内容に踏み込まない短いものにしてください\n"
             "- reason は20文字以内で書いてください"
         )
 
