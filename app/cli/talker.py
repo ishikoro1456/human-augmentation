@@ -3,6 +3,8 @@ import argparse
 import audioop
 import base64
 import os
+import platform
+import re
 import socket
 import subprocess
 import sys
@@ -28,33 +30,97 @@ from app.runtime.trace import TraceWriter
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
+def _default_mic_backend() -> str:
+    sysname = platform.system().lower()
+    if sysname == "darwin":
+        return "avfoundation"
+    if sysname == "windows":
+        return "dshow"
+    return "avfoundation"
+
+
 def _list_avfoundation_devices(ffmpeg_bin: str) -> None:
     cmd = [ffmpeg_bin, "-f", "avfoundation", "-list_devices", "true", "-i", ""]
     subprocess.run(cmd, check=False)
 
 
+def _dshow_audio_devices(ffmpeg_bin: str) -> list[str]:
+    cmd = [ffmpeg_bin, "-hide_banner", "-f", "dshow", "-list_devices", "true", "-i", "dummy"]
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    text = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    devices: list[str] = []
+    in_audio = False
+    for line in text.splitlines():
+        if "DirectShow audio devices" in line:
+            in_audio = True
+            continue
+        if "DirectShow video devices" in line:
+            in_audio = False
+        if not in_audio:
+            continue
+        if "Alternative name" in line:
+            continue
+        m = re.search(r"\"([^\"]+)\"", line)
+        if m:
+            devices.append(m.group(1))
+    return devices
+
+
+def _list_dshow_devices(ffmpeg_bin: str) -> None:
+    devices = _dshow_audio_devices(ffmpeg_bin)
+    if not devices:
+        print("DirectShow audio devices: 見つかりませんでした（ffmpeg が見えているか確認してください）")
+        return
+    print("DirectShow audio devices:")
+    for i, name in enumerate(devices):
+        print(f"[{i}] {name}")
+    print("")
+    print("使い方: --mic-backend dshow --mic-device :<index>")
+
+
 def _start_ffmpeg_mic(
     *,
     ffmpeg_bin: str,
+    backend: str,
     device: str,
     sample_rate: int,
 ) -> subprocess.Popen:
-    cmd = [
-        ffmpeg_bin,
-        "-loglevel",
-        "error",
-        "-f",
-        "avfoundation",
-        "-i",
-        device,
-        "-ac",
-        "1",
-        "-ar",
-        str(int(sample_rate)),
-        "-f",
-        "s16le",
-        "-",
-    ]
+    if backend == "avfoundation":
+        cmd = [
+            ffmpeg_bin,
+            "-loglevel",
+            "error",
+            "-f",
+            "avfoundation",
+            "-i",
+            device,
+            "-ac",
+            "1",
+            "-ar",
+            str(int(sample_rate)),
+            "-f",
+            "s16le",
+            "-",
+        ]
+    elif backend == "dshow":
+        cmd = [
+            ffmpeg_bin,
+            "-loglevel",
+            "error",
+            "-f",
+            "dshow",
+            "-i",
+            device,
+            "-ac",
+            "1",
+            "-ar",
+            str(int(sample_rate)),
+            "-f",
+            "s16le",
+            "-",
+        ]
+    else:
+        raise ValueError(f"unsupported mic backend: {backend}")
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -72,11 +138,17 @@ def main() -> None:
 
     parser.add_argument("--ffmpeg-bin", default=os.environ.get("FFMPEG_BIN", "ffmpeg"))
     parser.add_argument(
+        "--mic-backend",
+        choices=["auto", "avfoundation", "dshow"],
+        default="auto",
+        help="ffmpeg mic backend. auto: mac=avfoundation, windows=dshow",
+    )
+    parser.add_argument(
         "--mic-device",
         default=":0",
-        help="ffmpeg avfoundation device string. Example ':0' (audio only). Use --list-devices to see indices.",
+        help="mic device. avfoundation: ':<index>'. dshow: ':<index>' or 'audio=<name>'. Use --list-devices.",
     )
-    parser.add_argument("--list-devices", action="store_true", help="List avfoundation devices and exit")
+    parser.add_argument("--list-devices", action="store_true", help="List mic devices and exit")
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--frame-ms", type=int, default=20, help="Audio frame size to send (ms)")
 
@@ -89,8 +161,17 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    mic_backend = str(args.mic_backend or "auto").strip().lower()
+    if mic_backend == "auto":
+        mic_backend = _default_mic_backend()
+
     if args.list_devices:
-        _list_avfoundation_devices(args.ffmpeg_bin)
+        if mic_backend == "avfoundation":
+            _list_avfoundation_devices(args.ffmpeg_bin)
+        elif mic_backend == "dshow":
+            _list_dshow_devices(args.ffmpeg_bin)
+        else:
+            print(f"未対応の mic backend です: {mic_backend}")
         return
     if not args.connect_host:
         parser.error("--connect-host は必須です（--list-devices のときは不要です）")
@@ -113,6 +194,7 @@ def main() -> None:
                 "type": "talker_start",
                 "connect": {"host": str(host), "port": int(port)},
                 "mic_device": str(args.mic_device),
+                "mic_backend": str(mic_backend),
                 "audio": {"format": "s16le", "sample_rate": int(audio_cfg.sample_rate), "channels": 1, "frame_ms": int(audio_cfg.frame_ms)},
             }
         )
@@ -252,7 +334,24 @@ def main() -> None:
                 time.sleep(0.2)
     threading.Thread(target=_recv_loop, daemon=True).start()
 
-    proc = _start_ffmpeg_mic(ffmpeg_bin=args.ffmpeg_bin, device=args.mic_device, sample_rate=audio_cfg.sample_rate)
+    mic_device = str(args.mic_device)
+    if mic_backend == "dshow":
+        if mic_device.startswith(":") and mic_device[1:].isdigit():
+            idx = int(mic_device[1:])
+            devices = _dshow_audio_devices(args.ffmpeg_bin)
+            if 0 <= idx < len(devices):
+                mic_device = "audio=" + devices[idx]
+            else:
+                raise RuntimeError(f"mic-device index out of range: {mic_device} (devices={len(devices)})")
+        elif not (mic_device.startswith("audio=") or mic_device.startswith("video=")):
+            mic_device = "audio=" + mic_device
+
+    proc = _start_ffmpeg_mic(
+        ffmpeg_bin=args.ffmpeg_bin,
+        backend=mic_backend,
+        device=mic_device,
+        sample_rate=audio_cfg.sample_rate,
+    )
     if proc.stdout is None:
         raise RuntimeError("ffmpegのstdoutが取れません。")
 
