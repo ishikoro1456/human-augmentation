@@ -136,10 +136,15 @@ def human_signal_loop(
     event_queue: "queue.Queue[Dict[str, object]] | None" = None,
     debug: bool = False,
     status: StatusStore | None = None,
+    trace: TraceWriter | None = None,
+    trace_interval_sec: float = 1.0,
 ) -> None:
     last_eligible: bool | None = None
     last_present: bool | None = None
     episode_fired = False
+    last_trace_ts = 0.0
+    last_trace_present: bool | None = None
+    last_trace_hint: str | None = None
     while True:
         now = time.time()
         imu_bundle = buffer.build_bundle(
@@ -162,6 +167,39 @@ def human_signal_loop(
         present = bool(signal.get("present", False))
         hint = signal.get("gesture_hint")
         eligible = bool(present) and isinstance(hint, str) and hint in ("nod", "shake")
+
+        if trace and (
+            (now - last_trace_ts) >= float(max(0.2, trace_interval_sec))
+            or present != last_trace_present
+            or (str(hint) if isinstance(hint, str) else "") != (last_trace_hint or "")
+        ):
+            imu_latest = imu_bundle.get("latest", {})
+            imu_activity = imu_bundle.get("activity_1s", {})
+            trace.write(
+                {
+                    "type": "imu_signal_tick",
+                    "present": bool(present),
+                    "eligible": bool(eligible),
+                    "gesture_hint": str(hint) if isinstance(hint, str) else "",
+                    "reason": str(signal.get("reason", "") or ""),
+                    "last_sample_age_s": imu_bundle.get("last_sample_age_s"),
+                    "sample_rate_hz": imu_bundle.get("sample_rate_hz"),
+                    "latest": dict(imu_latest) if isinstance(imu_latest, dict) else {},
+                    "activity_1s": dict(imu_activity) if isinstance(imu_activity, dict) else {},
+                    "gyro_mag_max_1s": signal.get("gyro_mag_max_1s"),
+                    "threshold": signal.get("threshold"),
+                    "threshold_base": signal.get("threshold_base"),
+                    "run_max": signal.get("run_max"),
+                    "min_consecutive_above": signal.get("min_consecutive_above"),
+                    "dominant_axis": signal.get("dominant_axis"),
+                    "axis_map": signal.get("axis_map"),
+                    "motion_features": signal.get("motion_features"),
+                },
+                ts=now,
+            )
+            last_trace_ts = float(now)
+            last_trace_present = bool(present)
+            last_trace_hint = str(hint) if isinstance(hint, str) else ""
 
         if last_present is None:
             last_present = present
@@ -213,19 +251,20 @@ def transcript_server_loop(
         trace.write({"type": "talker_listen", "host": host, "port": int(port)})
     while True:
         conn, addr = server.accept()
+        addr_str = f"{addr[0]}:{addr[1]}"
         try:
             with conn_state.lock:
                 conn_state.sock = conn
-                conn_state.addr = f"{addr[0]}:{addr[1]}"
-            log(f"話し手接続: 接続 {addr[0]}:{addr[1]}")
+                conn_state.addr = addr_str
+            log(f"話し手接続: 接続 {addr_str}")
             if status:
-                status.set_talker_connection(connected=True, addr=f"{addr[0]}:{addr[1]}", ts=time.time())
+                status.set_talker_connection(connected=True, addr=addr_str, ts=time.time())
             if trace:
-                trace.write({"type": "talker_connected", "addr": f"{addr[0]}:{addr[1]}"})
+                trace.write({"type": "talker_connected", "addr": addr_str})
             try:
                 send_jsonl(conn, {"type": "session", "experiment_id": str(experiment_id), "ts_ms": int(_now_ms())})
                 if trace:
-                    trace.write({"type": "session_sent", "addr": f"{addr[0]}:{addr[1]}"})
+                    trace.write({"type": "session_sent", "addr": addr_str})
             except Exception as exc:
                 log(f"話し手接続: session を送れませんでした: {exc}")
                 if trace:
@@ -252,6 +291,10 @@ def transcript_server_loop(
                 status.set_talker_connection(connected=False, addr="", ts=time.time())
             if trace:
                 trace.write({"type": "talker_disconnected"})
+            try:
+                event_queue.put({"type": "talker_disconnected", "addr": addr_str, "ts_ms": int(_now_ms())})
+            except Exception:
+                pass
 
 
 @dataclass
@@ -315,6 +358,7 @@ def run_listener_session(
     vad_calib_sec: float = 1.0,
     vad_threshold_rms: int = 0,
     vad_threshold_mult: float = 3.0,
+    vad_max_segment_ms: int = 20000,
     send_backchannel_to_talker: bool = True,
     local_backchannel_play: bool = False,
     mode: str = "llm",
@@ -371,6 +415,7 @@ def run_listener_session(
                     "calib_sec": float(vad_calib_sec),
                     "threshold_rms": int(vad_threshold_rms),
                     "threshold_mult": float(vad_threshold_mult),
+                    "max_segment_ms": int(vad_max_segment_ms),
                 },
             }
         )
@@ -426,6 +471,8 @@ def run_listener_session(
             start_ms = job.get("start_ts_ms")
             end_ms = job.get("end_ts_ms")
             sample_rate = job.get("sample_rate")
+            enqueued_ts_ms = job.get("enqueued_ts_ms")
+            end_reason = job.get("end_reason")
             if not isinstance(seg_id, int):
                 continue
             if not isinstance(pcm, (bytes, bytearray)):
@@ -436,24 +483,84 @@ def run_listener_session(
                 continue
 
             wav_path = stt_segments_dir / f"seg_{seg_id:04d}_{start_ms}_{end_ms}.wav"
-            try:
-                _write_wav(wav_path, pcm_s16le=bytes(pcm), sample_rate=sample_rate)
-                with wav_path.open("rb") as f:
-                    params: Dict[str, object] = {
-                        "model": stt_model,
-                        "file": f,
-                        "response_format": _stt_response_format_for_model(stt_model),
+            dequeued_ts_ms = int(_now_ms())
+            queue_wait_ms: int | None = None
+            if isinstance(enqueued_ts_ms, int):
+                queue_wait_ms = int(dequeued_ts_ms - int(enqueued_ts_ms))
+            pcm_bytes = int(len(pcm))
+            duration_s = round((float(pcm_bytes) / float(sample_rate * 2)) if int(sample_rate) > 0 else 0.0, 3)
+            if trace:
+                trace.write(
+                    {
+                        "type": "stt_job_start",
+                        "segment_id": int(seg_id),
+                        "wav_path": str(wav_path),
+                        "pcm_bytes": int(pcm_bytes),
+                        "duration_s": float(duration_s),
+                        "queue_wait_ms": None if queue_wait_ms is None else int(queue_wait_ms),
+                        "enqueued_ts_ms": int(enqueued_ts_ms) if isinstance(enqueued_ts_ms, int) else None,
+                        "dequeued_ts_ms": int(dequeued_ts_ms),
+                        "end_reason": str(end_reason) if isinstance(end_reason, str) else None,
+                        "model": str(stt_model),
                     }
+                )
+            try:
+                stage = "write_wav"
+                _write_wav(wav_path, pcm_s16le=bytes(pcm), sample_rate=sample_rate)
+                if trace:
+                    trace.write(
+                        {
+                            "type": "stt_wav_written",
+                            "segment_id": int(seg_id),
+                            "wav_path": str(wav_path),
+                            "pcm_bytes": int(pcm_bytes),
+                            "duration_s": float(duration_s),
+                        }
+                    )
+                stage = "request"
+                req_started = time.time()
+                resp_format = _stt_response_format_for_model(stt_model)
+                if trace:
+                    trace.write(
+                        {
+                            "type": "stt_request_start",
+                            "segment_id": int(seg_id),
+                            "model": str(stt_model),
+                            "response_format": str(resp_format),
+                            "language": str(stt_language) if stt_language else "",
+                            "prompt_enabled": bool(stt_prompt),
+                        }
+                    )
+                with wav_path.open("rb") as f:
+                    params: Dict[str, object] = {"model": stt_model, "file": f, "response_format": resp_format}
                     if stt_language:
                         params["language"] = stt_language
                     if stt_prompt:
                         params["prompt"] = stt_prompt
                     resp = client.audio.transcriptions.create(**params)
                 text = _extract_transcript_text(resp)
+                req_ms = int(round((time.time() - req_started) * 1000.0))
+                if trace:
+                    trace.write(
+                        {
+                            "type": "stt_request_end",
+                            "segment_id": int(seg_id),
+                            "latency_ms": int(req_ms),
+                            "text_len": int(len(text)),
+                        }
+                    )
             except Exception as exc:
                 emit(f"文字起こしに失敗しました: {exc}")
                 if trace:
-                    trace.write({"type": "stt_error", "segment_id": int(seg_id), "error": str(exc)})
+                    trace.write(
+                        {
+                            "type": "stt_error",
+                            "segment_id": int(seg_id),
+                            "stage": str(stage) if "stage" in locals() else "",
+                            "wav_path": str(wav_path),
+                            "error": str(exc),
+                        }
+                    )
                 continue
 
             if text:
@@ -468,7 +575,16 @@ def run_listener_session(
                     }
                 )
                 if trace:
-                    trace.write({"type": "stt_segment", "segment_id": int(seg_id), "text": text})
+                    trace.write(
+                        {
+                            "type": "stt_segment",
+                            "segment_id": int(seg_id),
+                            "text": text,
+                            "text_len": int(len(text)),
+                            "wav_path": str(wav_path),
+                            "duration_s": float(duration_s),
+                        }
+                    )
 
     threading.Thread(target=_stt_worker, daemon=True).start()
 
@@ -494,14 +610,17 @@ def run_listener_session(
     seg_rms_sum = 0
     seg_rms_max = 0
 
-    def _recompute_vad_derived() -> tuple[int, int, int, int]:
+    def _recompute_vad_derived() -> tuple[int, int, int, int, int]:
         frame_ms = int(max(5, speaker_frame_ms))
         frame_samples = int(speaker_sample_rate * frame_ms / 1000)
         frame_bytes = frame_samples * 2
         pre_roll_frames = max(0, int(int(vad_pre_roll_ms) / frame_ms))
         silence_end_frames = max(1, int(int(vad_silence_end_ms) / frame_ms))
         min_speech_frames = max(1, int(int(vad_min_speech_ms) / frame_ms))
-        return frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames
+        max_segment_frames = 0
+        if int(vad_max_segment_ms) > 0:
+            max_segment_frames = max(1, int(int(vad_max_segment_ms) / frame_ms))
+        return frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames, max_segment_frames
 
     def _audio_loop() -> None:
         nonlocal speaker_state_seen, speaker_sample_rate, speaker_frame_ms
@@ -509,7 +628,160 @@ def run_listener_session(
         nonlocal noise_rms, calib_until, speaking, start_voice_streak, silence_frames, pre_roll, segment_frames, segment_start_ms, seg_id
         nonlocal seg_voice_frames, seg_rms_sum, seg_rms_max
 
-        frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames = _recompute_vad_derived()
+        frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames, max_segment_frames = _recompute_vad_derived()
+
+        def _flush_segment(*, end_ts_ms: int, reason: str) -> None:
+            nonlocal speaking, start_voice_streak, silence_frames, pre_roll, segment_frames, segment_start_ms, seg_id
+            nonlocal seg_voice_frames, seg_rms_sum, seg_rms_max
+
+            if not segment_frames:
+                speaking = False
+                start_voice_streak = 0
+                silence_frames = 0
+                pre_roll = []
+                seg_voice_frames = 0
+                seg_rms_sum = 0
+                seg_rms_max = 0
+                return
+
+            frame_ms = int(max(5, speaker_frame_ms))
+            seg_frames = int(len(segment_frames))
+            seg_ms_est = int(seg_frames * frame_ms)
+            voice_ms = int(int(seg_voice_frames) * frame_ms)
+            should_send = (seg_frames >= int(min_speech_frames)) and (voice_ms >= int(max(0, vad_min_voice_ms)))
+            pcm_bytes_est = int(seg_frames * int(frame_bytes))
+            rms_mean = round((float(seg_rms_sum) / float(seg_frames)) if seg_frames > 0 else 0.0, 1)
+            thr_rms = (
+                int(vad_threshold_rms)
+                if int(vad_threshold_rms) > 0
+                else int(max(300.0, float(noise_rms) * float(vad_threshold_mult)))
+            )
+            noise_rms_now = round(float(noise_rms), 1)
+
+            if should_send:
+                seg_id += 1
+                enqueued_ts_ms = int(_now_ms())
+                pcm = b"".join(segment_frames)
+                stt_queue.put(
+                    {
+                        "segment_id": int(seg_id),
+                        "pcm_s16le": pcm,
+                        "start_ts_ms": int(segment_start_ms),
+                        "end_ts_ms": int(end_ts_ms),
+                        "sample_rate": int(speaker_sample_rate),
+                        "enqueued_ts_ms": int(enqueued_ts_ms),
+                        "end_reason": str(reason),
+                    }
+                )
+                stt_queue_size = 0
+                try:
+                    stt_queue_size = int(stt_queue.qsize())
+                except Exception:
+                    stt_queue_size = 0
+                if trace:
+                    trace.write(
+                        {
+                            "type": "vad_segment",
+                            "segment_id": int(seg_id),
+                            "start_ts_ms": int(segment_start_ms),
+                            "end_ts_ms": int(end_ts_ms),
+                            "frames": int(seg_frames),
+                            "voice_frames": int(seg_voice_frames),
+                            "voice_ms": int(voice_ms),
+                            "segment_ms_est": int(seg_ms_est),
+                            "rms_mean": float(rms_mean),
+                            "rms_max": int(seg_rms_max),
+                            "pcm_bytes": int(len(pcm)),
+                            "sample_rate": int(speaker_sample_rate),
+                            "frame_ms": int(frame_ms),
+                            "thr_rms": int(thr_rms),
+                            "noise_rms": float(noise_rms_now),
+                            "stt_queue_size": int(stt_queue_size),
+                            "enqueued_ts_ms": int(enqueued_ts_ms),
+                            "end_reason": str(reason),
+                        }
+                    )
+            else:
+                if trace:
+                    trace.write(
+                        {
+                            "type": "vad_segment_drop",
+                            "start_ts_ms": int(segment_start_ms),
+                            "end_ts_ms": int(end_ts_ms),
+                            "frames": int(seg_frames),
+                            "voice_frames": int(seg_voice_frames),
+                            "voice_ms": int(voice_ms),
+                            "segment_ms_est": int(seg_ms_est),
+                            "rms_mean": float(rms_mean),
+                            "rms_max": int(seg_rms_max),
+                            "pcm_bytes_est": int(pcm_bytes_est),
+                            "sample_rate": int(speaker_sample_rate),
+                            "frame_ms": int(frame_ms),
+                            "thr_rms": int(thr_rms),
+                            "noise_rms": float(noise_rms_now),
+                            "reason": "too_short_or_quiet",
+                            "end_reason": str(reason),
+                            "min_speech_frames": int(min_speech_frames),
+                            "vad_min_voice_ms": int(max(0, vad_min_voice_ms)),
+                        }
+                    )
+
+            speaking = False
+            start_voice_streak = 0
+            silence_frames = 0
+            segment_frames = []
+            pre_roll = []
+            seg_voice_frames = 0
+            seg_rms_sum = 0
+            seg_rms_max = 0
+
+        vad_tick_started = time.time()
+        vad_tick_frames = 0
+        vad_tick_voice_frames = 0
+        vad_tick_rms_sum = 0
+        vad_tick_rms_max = 0
+        vad_tick_last_rms = 0
+        vad_tick_last_thr = 0
+
+        def _trace_vad_tick(now_ts: float, *, rms: int, thr: int, is_voice: bool, chunk_ts_ms: int) -> None:
+            nonlocal vad_tick_started, vad_tick_frames, vad_tick_voice_frames, vad_tick_rms_sum, vad_tick_rms_max
+            nonlocal vad_tick_last_rms, vad_tick_last_thr
+
+            vad_tick_frames += 1
+            vad_tick_rms_sum += int(rms)
+            vad_tick_rms_max = max(int(vad_tick_rms_max), int(rms))
+            if is_voice:
+                vad_tick_voice_frames += 1
+            vad_tick_last_rms = int(rms)
+            vad_tick_last_thr = int(thr)
+            if (not trace) or (now_ts - float(vad_tick_started)) < 1.0:
+                return
+            mean = (float(vad_tick_rms_sum) / float(vad_tick_frames)) if vad_tick_frames > 0 else 0.0
+            trace.write(
+                {
+                    "type": "vad_tick",
+                    "ts_ms": int(chunk_ts_ms),
+                    "frames": int(vad_tick_frames),
+                    "voice_frames": int(vad_tick_voice_frames),
+                    "rms_mean": round(float(mean), 1),
+                    "rms_max": int(vad_tick_rms_max),
+                    "rms_last": int(vad_tick_last_rms),
+                    "thr_last": int(vad_tick_last_thr),
+                    "noise_rms": round(float(noise_rms), 1),
+                    "speaking": bool(speaking),
+                    "silence_frames": int(silence_frames),
+                    "start_voice_streak": int(start_voice_streak),
+                    "segment_frames_len": int(len(segment_frames)),
+                    "pre_roll_len": int(len(pre_roll)),
+                    "frame_ms": int(max(5, speaker_frame_ms)),
+                    "sample_rate": int(speaker_sample_rate),
+                }
+            )
+            vad_tick_started = float(now_ts)
+            vad_tick_frames = 0
+            vad_tick_voice_frames = 0
+            vad_tick_rms_sum = 0
+            vad_tick_rms_max = 0
 
         while True:
             msg = net_events.get()
@@ -517,7 +789,34 @@ def run_listener_session(
                 continue
             msg_type = str(msg.get("type", ""))
 
+            if msg_type == "talker_disconnected":
+                if speaking and segment_frames:
+                    _flush_segment(end_ts_ms=int(msg.get("ts_ms", _now_ms())), reason="talker_disconnected")
+                speaking = False
+                start_voice_streak = 0
+                silence_frames = 0
+                pre_roll = []
+                segment_frames = []
+                seg_voice_frames = 0
+                seg_rms_sum = 0
+                seg_rms_max = 0
+                speaker_state.speaking = False
+                speaker_state.silence_ms = 0
+                speaker_state.last_update_ts = time.time()
+                speaker_state_seen = True
+                continue
+
             if msg_type == "hello":
+                if speaking and segment_frames:
+                    _flush_segment(end_ts_ms=int(msg.get("ts_ms", _now_ms())), reason="hello")
+                speaking = False
+                start_voice_streak = 0
+                silence_frames = 0
+                pre_roll = []
+                segment_frames = []
+                seg_voice_frames = 0
+                seg_rms_sum = 0
+                seg_rms_max = 0
                 audio = msg.get("audio", {})
                 if isinstance(audio, dict):
                     sr = audio.get("sample_rate")
@@ -532,7 +831,7 @@ def run_listener_session(
                     )
                     speaker_player_started = False
                     speaker_player_warned = False
-                    frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames = _recompute_vad_derived()
+                    frame_bytes, pre_roll_frames, silence_end_frames, min_speech_frames, max_segment_frames = _recompute_vad_derived()
                 continue
 
             if msg_type != "audio_chunk":
@@ -545,6 +844,7 @@ def run_listener_session(
                 raw = base64.b64decode(data_b64)
             except Exception:
                 continue
+            chunk_ts_ms = int(msg.get("ts_ms", _now_ms()))
 
             if speaker_playback:
                 if not speaker_player_started:
@@ -592,7 +892,7 @@ def run_listener_session(
                         seg_rms_sum = int(rms)
                         seg_rms_max = int(rms)
                         segment_frames = list(pre_roll)
-                        segment_start_ms = int(msg.get("ts_ms", _now_ms()))
+                        segment_start_ms = int(chunk_ts_ms)
                         speaker_state.speaking = True
                         speaker_state.silence_ms = 0
                         speaker_state.last_update_ts = now_ts
@@ -602,6 +902,13 @@ def run_listener_session(
                         speaker_state.silence_ms = int(max(0, speaker_state.silence_ms + int(speaker_frame_ms)))
                         speaker_state.last_update_ts = now_ts
                         speaker_state_seen = True
+                    _trace_vad_tick(
+                        now_ts,
+                        rms=int(rms),
+                        thr=int(thr),
+                        is_voice=bool(is_voice),
+                        chunk_ts_ms=int(chunk_ts_ms),
+                    )
                     continue
 
                 # speaking 中
@@ -615,71 +922,45 @@ def run_listener_session(
                     speaker_state.silence_ms = 0
                     speaker_state.last_update_ts = now_ts
                     speaker_state_seen = True
-                    continue
-
-                seg_rms_sum += int(rms)
-                seg_rms_max = max(int(seg_rms_max), int(rms))
-                silence_frames += 1
-                speaker_state.speaking = False
-                speaker_state.silence_ms = int(silence_frames * int(speaker_frame_ms))
-                speaker_state.last_update_ts = now_ts
-                speaker_state_seen = True
-
-                if silence_frames < silence_end_frames:
-                    continue
-
-                # 区切り
-                speaking = False
-                seg_end_ms = int(msg.get("ts_ms", _now_ms()))
-                silence_frames = 0
-
-                voice_ms = int(int(seg_voice_frames) * int(max(5, speaker_frame_ms)))
-                should_send = (len(segment_frames) >= min_speech_frames) and (voice_ms >= int(max(0, vad_min_voice_ms)))
-                if should_send:
-                    seg_id += 1
-                    stt_queue.put(
-                        {
-                            "segment_id": int(seg_id),
-                            "pcm_s16le": b"".join(segment_frames),
-                            "start_ts_ms": int(segment_start_ms),
-                            "end_ts_ms": int(seg_end_ms),
-                            "sample_rate": int(speaker_sample_rate),
-                        }
-                    )
-                    if trace:
-                        trace.write(
-                            {
-                                "type": "vad_segment",
-                                "segment_id": int(seg_id),
-                                "start_ts_ms": int(segment_start_ms),
-                                "end_ts_ms": int(seg_end_ms),
-                                "frames": int(len(segment_frames)),
-                                "voice_frames": int(seg_voice_frames),
-                                "voice_ms": int(voice_ms),
-                                "rms_max": int(seg_rms_max),
-                            }
-                        )
                 else:
-                    if trace:
-                        trace.write(
-                            {
-                                "type": "vad_segment_drop",
-                                "start_ts_ms": int(segment_start_ms),
-                                "end_ts_ms": int(seg_end_ms),
-                                "frames": int(len(segment_frames)),
-                                "voice_frames": int(seg_voice_frames),
-                                "voice_ms": int(voice_ms),
-                                "rms_max": int(seg_rms_max),
-                                "reason": "too_short_or_quiet",
-                                "min_speech_frames": int(min_speech_frames),
-                                "vad_min_voice_ms": int(max(0, vad_min_voice_ms)),
-                            }
+                    seg_rms_sum += int(rms)
+                    seg_rms_max = max(int(seg_rms_max), int(rms))
+                    silence_frames += 1
+                    speaker_state.speaking = False
+                    speaker_state.silence_ms = int(silence_frames * int(speaker_frame_ms))
+                    speaker_state.last_update_ts = now_ts
+                    speaker_state_seen = True
+
+                    if silence_frames >= silence_end_frames:
+                        _trace_vad_tick(
+                            now_ts,
+                            rms=int(rms),
+                            thr=int(thr),
+                            is_voice=bool(is_voice),
+                            chunk_ts_ms=int(chunk_ts_ms),
                         )
-                segment_frames = []
-                pre_roll = []
-                seg_voice_frames = 0
-                seg_rms_sum = 0
-                seg_rms_max = 0
+                        _flush_segment(end_ts_ms=int(chunk_ts_ms), reason="silence")
+                        continue
+
+                if int(max_segment_frames) > 0 and int(len(segment_frames)) >= int(max_segment_frames):
+                    tail = segment_frames[-pre_roll_frames:] if int(pre_roll_frames) > 0 else []
+                    _trace_vad_tick(
+                        now_ts,
+                        rms=int(rms),
+                        thr=int(thr),
+                        is_voice=bool(is_voice),
+                        chunk_ts_ms=int(chunk_ts_ms),
+                    )
+                    _flush_segment(end_ts_ms=int(chunk_ts_ms), reason="max_segment")
+                    pre_roll = list(tail)
+                    continue
+                _trace_vad_tick(
+                    now_ts,
+                    rms=int(rms),
+                    thr=int(thr),
+                    is_voice=bool(is_voice),
+                    chunk_ts_ms=int(chunk_ts_ms),
+                )
 
     threading.Thread(target=_audio_loop, daemon=True).start()
 
@@ -747,6 +1028,7 @@ def run_listener_session(
             "event_queue": signal_events,
             "debug": debug_signal and (status is None),
             "status": status,
+            "trace": trace,
         },
         daemon=True,
     ).start()

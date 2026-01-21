@@ -64,6 +64,12 @@ def main() -> None:
     parser.add_argument("--vad-calib-sec", type=float, default=1.0)
     parser.add_argument("--vad-threshold-rms", type=int, default=0)
     parser.add_argument("--vad-threshold-mult", type=float, default=3.0)
+    parser.add_argument(
+        "--vad-max-segment-ms",
+        type=int,
+        default=20000,
+        help="無音が来なくてもこの長さで強制的に区切ります（0以下で無効）",
+    )
 
     parser.add_argument("--no-send-backchannel-to-talker", action="store_true")
     parser.add_argument("--local-backchannel-play", action="store_true")
@@ -145,6 +151,7 @@ def main() -> None:
         vad_calib_sec=args.vad_calib_sec,
         vad_threshold_rms=args.vad_threshold_rms,
         vad_threshold_mult=args.vad_threshold_mult,
+        vad_max_segment_ms=args.vad_max_segment_ms,
         send_backchannel_to_talker=(not args.no_send_backchannel_to_talker),
         local_backchannel_play=args.local_backchannel_play,
         calibration_still_sec=args.calibration_still_sec,
