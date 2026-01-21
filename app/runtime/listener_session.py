@@ -300,7 +300,6 @@ def run_listener_session(
     boundary_silence_ms: int = 350,
     context_max_lines: int = 10,
     early_call_delay_sec: float = 0.2,
-    deadline_guard_sec: float = 0.3,
     speaker_playback: bool = True,
     speaker_playback_bin: str = "ffplay",
     stt_model: str = "gpt-4o-transcribe",
@@ -1078,11 +1077,8 @@ def run_listener_session(
                     "signal_ts": float(ts),
                     "deadline_ts": float(ts) + float(human_signal_hold_sec),
                     "early_call_ts": float(ts) + float(early_call_delay_sec),
-                    "deadline_call_ts": float(ts) + max(0.0, float(human_signal_hold_sec) - float(deadline_guard_sec)),
                     "early_called": False,
-                    "deadline_called": False,
                     "wait_used": False,
-                    "wait_until_ts": 0.0,
                     "planned": None,
                     "planned_after_ts": 0.0,
                     "planned_armed": False,
@@ -1097,12 +1093,11 @@ def run_listener_session(
                             "signal_ts": round(float(ts), 3),
                             "deadline_ts": round(float(pending["deadline_ts"]), 3),
                             "early_call_ts": round(float(pending["early_call_ts"]), 3),
-                            "deadline_call_ts": round(float(pending["deadline_call_ts"]), 3),
                             "signal": dict(sig),
                         }
                     )
                 if debug_signal or debug_agent:
-                    emit(f"保留: {hint} (最大{float(human_signal_hold_sec):g}秒)")
+                    emit(f"保留: {hint} (区切り待ち)")
 
         # planned を boundary で armed にする
         if pending is not None and (boundary_event or speaker_pause_like_boundary):
@@ -1173,7 +1168,6 @@ def run_listener_session(
                             "signal_ts": pending.get("signal_ts"),
                             "deadline_ts": pending.get("deadline_ts"),
                             "early_called": bool(pending.get("early_called", False)),
-                            "deadline_called": bool(pending.get("deadline_called", False)),
                             "wait_used": bool(pending.get("wait_used", False)),
                             "planned": pending.get("planned"),
                             "planned_armed": bool(pending.get("planned_armed", False)),
@@ -1201,21 +1195,12 @@ def run_listener_session(
             decision_point = "boundary"
             is_boundary = True
         else:
-            wait_until_ts = pending.get("wait_until_ts", 0.0)
-            if isinstance(wait_until_ts, (int, float)) and now < float(wait_until_ts):
-                time.sleep(0.01)
-                continue
             early_called = bool(pending.get("early_called", False))
-            deadline_called = bool(pending.get("deadline_called", False))
             early_call_ts = pending.get("early_call_ts")
-            deadline_call_ts = pending.get("deadline_call_ts")
             mark_pending_key: str | None = None
             if (not early_called) and isinstance(early_call_ts, (int, float)) and now >= float(early_call_ts):
                 decision_point = "signal_early"
                 mark_pending_key = "early_called"
-            elif (not deadline_called) and isinstance(deadline_call_ts, (int, float)) and now >= float(deadline_call_ts):
-                decision_point = "deadline_no_boundary"
-                mark_pending_key = "deadline_called"
             else:
                 continue
 
