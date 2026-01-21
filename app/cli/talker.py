@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import argparse
-import audioop
 import base64
+import math
 import os
 import platform
 import re
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -27,8 +28,32 @@ from app.net.jsonl import iter_jsonl_messages, resolve_host, send_jsonl
 from app.runtime.trace import TraceWriter
 
 
+try:
+    import audioop as _audioop
+except Exception:
+    _audioop = None
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _rms_s16le(raw: bytes) -> int:
+    if _audioop is not None:
+        try:
+            return int(_audioop.rms(raw, 2))
+        except Exception:
+            pass
+    if not raw:
+        return 0
+    count = int(len(raw) // 2)
+    if count <= 0:
+        return 0
+    total = 0
+    for (s,) in struct.iter_unpack("<h", raw[: count * 2]):
+        total += int(s) * int(s)
+    return int(math.sqrt(total / count))
+
 
 def _default_mic_backend() -> str:
     sysname = platform.system().lower()
@@ -36,7 +61,7 @@ def _default_mic_backend() -> str:
         return "avfoundation"
     if sysname == "windows":
         return "dshow"
-    return "avfoundation"
+    return "pulse"
 
 
 def _list_avfoundation_devices(ffmpeg_bin: str) -> None:
@@ -76,6 +101,40 @@ def _list_dshow_devices(ffmpeg_bin: str) -> None:
         print(f"[{i}] {name}")
     print("")
     print("使い方: --mic-backend dshow --mic-device :<index>")
+
+
+def _list_pulse_devices() -> None:
+    cmd = ["pactl", "list", "sources", "short"]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        out = (proc.stdout or "").strip()
+        if out:
+            print("PulseAudio sources:")
+            print(out)
+            print("")
+            print("使い方: --mic-backend pulse --mic-device default")
+            return
+    except FileNotFoundError:
+        pass
+    print("PulseAudio sources: pactl が見つかりませんでした")
+    print("確認: pactl list sources short")
+
+
+def _list_alsa_devices() -> None:
+    cmd = ["arecord", "-l"]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        out = (proc.stdout or "").strip()
+        if out:
+            print("ALSA devices:")
+            print(out)
+            print("")
+            print("使い方: --mic-backend alsa --mic-device default")
+            return
+    except FileNotFoundError:
+        pass
+    print("ALSA devices: arecord が見つかりませんでした")
+    print("確認: arecord -l")
 
 
 def _start_ffmpeg_mic(
@@ -119,6 +178,40 @@ def _start_ffmpeg_mic(
             "s16le",
             "-",
         ]
+    elif backend == "pulse":
+        cmd = [
+            ffmpeg_bin,
+            "-loglevel",
+            "error",
+            "-f",
+            "pulse",
+            "-i",
+            device,
+            "-ac",
+            "1",
+            "-ar",
+            str(int(sample_rate)),
+            "-f",
+            "s16le",
+            "-",
+        ]
+    elif backend == "alsa":
+        cmd = [
+            ffmpeg_bin,
+            "-loglevel",
+            "error",
+            "-f",
+            "alsa",
+            "-i",
+            device,
+            "-ac",
+            "1",
+            "-ar",
+            str(int(sample_rate)),
+            "-f",
+            "s16le",
+            "-",
+        ]
     else:
         raise ValueError(f"unsupported mic backend: {backend}")
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -139,14 +232,14 @@ def main() -> None:
     parser.add_argument("--ffmpeg-bin", default=os.environ.get("FFMPEG_BIN", "ffmpeg"))
     parser.add_argument(
         "--mic-backend",
-        choices=["auto", "avfoundation", "dshow"],
+        choices=["auto", "avfoundation", "dshow", "pulse", "alsa"],
         default="auto",
-        help="ffmpeg mic backend. auto: mac=avfoundation, windows=dshow",
+        help="ffmpeg mic backend. auto: mac=avfoundation, windows=dshow, linux=pulse",
     )
     parser.add_argument(
         "--mic-device",
         default=":0",
-        help="mic device. avfoundation: ':<index>'. dshow: ':<index>' or 'audio=<name>'. Use --list-devices.",
+        help="mic device. avfoundation: ':<index>'. dshow: ':<index>' or 'audio=<name>'. pulse/alsa: 'default' など。Use --list-devices.",
     )
     parser.add_argument("--list-devices", action="store_true", help="List mic devices and exit")
     parser.add_argument("--sample-rate", type=int, default=16000)
@@ -170,6 +263,10 @@ def main() -> None:
             _list_avfoundation_devices(args.ffmpeg_bin)
         elif mic_backend == "dshow":
             _list_dshow_devices(args.ffmpeg_bin)
+        elif mic_backend == "pulse":
+            _list_pulse_devices()
+        elif mic_backend == "alsa":
+            _list_alsa_devices()
         else:
             print(f"未対応の mic backend です: {mic_backend}")
         return
@@ -335,6 +432,8 @@ def main() -> None:
     threading.Thread(target=_recv_loop, daemon=True).start()
 
     mic_device = str(args.mic_device)
+    if mic_backend in {"pulse", "alsa"} and mic_device == ":0":
+        mic_device = "default"
     if mic_backend == "dshow":
         if mic_device.startswith(":") and mic_device[1:].isdigit():
             idx = int(mic_device[1:])
@@ -370,7 +469,7 @@ def main() -> None:
             if not raw or len(raw) < frame_bytes:
                 break
 
-            rms = int(audioop.rms(raw, 2))
+            rms = _rms_s16le(raw)
             stats_frames += 1
             stats_bytes += len(raw)
             stats_rms_sum += int(rms)

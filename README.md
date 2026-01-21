@@ -96,6 +96,14 @@ Windows の場合は次です。
 uv run python app/cli/talker.py --mic-backend dshow --list-devices
 ```
 
+WSL 上で動かす場合は、Windows ではなく Linux として動きます。まずは次を試してください。
+
+```
+uv run python app/cli/talker.py --mic-backend pulse --list-devices
+```
+
+`pactl` が無いと言われた場合は、WSL 側に入っているか確認してください。うまくいかないときは、talker は WSL ではなく Windows 側（PowerShell など）で動かすのが早いことがあります。
+
 起動するときの `--mic-device` は `:<音声番号>` です。たとえば音声番号が 2 なら `:2` です。
 
 macOS の例です。
@@ -108,6 +116,12 @@ Windows の例です（`--mic-backend dshow` を付けます）。
 
 ```
 uv run python app/cli/talker.py --connect-host 192.168.0.10 --connect-port 8765 --mic-backend dshow --mic-device :0 --trace-jsonl data/logs/trace_talker.jsonl
+```
+
+WSL の例です。
+
+```
+uv run python app/cli/talker.py --connect-host 192.168.0.10 --connect-port 8765 --mic-backend pulse --mic-device default --trace-jsonl data/logs/trace_talker.jsonl
 ```
 
 talker は、接続できるまで待ってからマイク取り込みを始めます。先に listener を起動してください。
