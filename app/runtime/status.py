@@ -59,6 +59,17 @@ class AudioStatus:
 
 
 @dataclass
+class UiStatus:
+    guide: str = ""
+    guide_ts: Optional[float] = None
+    experiment_id: str = ""
+    mode: str = ""
+    talker_connected: bool = False
+    talker_addr: str = ""
+    human_menu: List[str] = field(default_factory=list)
+
+
+@dataclass
 class SessionStatus:
     started_at: float = field(default_factory=time.time)
     transcript: TranscriptStatus = field(default_factory=TranscriptStatus)
@@ -66,6 +77,7 @@ class SessionStatus:
     imu: ImuStatus = field(default_factory=ImuStatus)
     agent: AgentStatus = field(default_factory=AgentStatus)
     audio: AudioStatus = field(default_factory=AudioStatus)
+    ui: UiStatus = field(default_factory=UiStatus)
     logs: List[str] = field(default_factory=list)
 
 
@@ -179,6 +191,28 @@ class StatusStore:
             self._status.agent.last_reason = reason
             self._status.agent.last_latency_ms = latency_ms
             self._status.agent.last_ts = ts
+
+    def set_ui_guide(self, *, text: str, ts: Optional[float] = None) -> None:
+        now = time.time() if ts is None else float(ts)
+        with self._lock:
+            self._status.ui.guide = str(text)
+            self._status.ui.guide_ts = now
+
+    def set_experiment(self, *, experiment_id: str, mode: str) -> None:
+        with self._lock:
+            self._status.ui.experiment_id = str(experiment_id)
+            self._status.ui.mode = str(mode)
+
+    def set_talker_connection(self, *, connected: bool, addr: str = "", ts: Optional[float] = None) -> None:
+        now = time.time() if ts is None else float(ts)
+        with self._lock:
+            self._status.ui.talker_connected = bool(connected)
+            self._status.ui.talker_addr = str(addr)
+            self._status.ui.guide_ts = now
+
+    def set_human_menu(self, *, lines: List[str]) -> None:
+        with self._lock:
+            self._status.ui.human_menu = list(lines)
 
     def set_backchannel_playback(self, *, path: Path, played: bool) -> None:
         with self._lock:

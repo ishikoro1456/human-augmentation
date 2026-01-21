@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--baud", type=int, default=115200)
 
     parser.add_argument("--ui", action="store_true")
+    parser.add_argument("--ui-mode", choices=["participant", "debug"], default="participant")
     parser.add_argument("--trace-jsonl", default="")
     parser.add_argument("--experiment-id", default="", help="省略すると自動生成します")
 
@@ -104,7 +105,8 @@ def main() -> None:
     if status:
         from app.cli.dashboard import run_dashboard
 
-        threading.Thread(target=run_dashboard, args=(status,), daemon=True).start()
+        status.set_experiment(experiment_id=exp_id, mode=args.mode)
+        threading.Thread(target=run_dashboard, args=(status,), kwargs={"ui_mode": args.ui_mode}, daemon=True).start()
 
     run_listener_session(
         catalog_path=Path(args.catalog),

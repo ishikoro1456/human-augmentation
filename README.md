@@ -48,6 +48,8 @@ ls /dev/cu.*
 uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.jsonl --listen-host 0.0.0.0 --listen-port 8765 --port /dev/cu.usbserial-310 --baud 115200
 ```
 
+`--ui` は見やすさ重視の画面（participant）を出します。開発中に細かい情報も見たいときは、`--ui-mode debug` を付けます。
+
 はじめて動かすときに IMU の向きが分からない場合は、追加で `--gesture-calibration` を付けると、軸の推定が入ります。
 
 起動直後に IMU の計測が入ります。急いで試すだけなら、次で静止/動作の計測を省略できます。

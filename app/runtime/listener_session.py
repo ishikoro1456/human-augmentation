@@ -157,6 +157,7 @@ def transcript_server_loop(
     event_queue: "queue.Queue[Dict[str, object]]",
     conn_state: TalkerConnection,
     log: callable,
+    status: StatusStore | None = None,
     trace: TraceWriter | None = None,
 ) -> None:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -173,6 +174,8 @@ def transcript_server_loop(
                 conn_state.sock = conn
                 conn_state.addr = f"{addr[0]}:{addr[1]}"
             log(f"話し手接続: 接続 {addr[0]}:{addr[1]}")
+            if status:
+                status.set_talker_connection(connected=True, addr=f"{addr[0]}:{addr[1]}", ts=time.time())
             if trace:
                 trace.write({"type": "talker_connected", "addr": f"{addr[0]}:{addr[1]}"})
             try:
@@ -201,6 +204,8 @@ def transcript_server_loop(
             except Exception:
                 pass
             log("話し手接続: 切断")
+            if status:
+                status.set_talker_connection(connected=False, addr="", ts=time.time())
             if trace:
                 trace.write({"type": "talker_disconnected"})
 
@@ -273,6 +278,7 @@ def run_listener_session(
 ) -> None:
     def emit(message: str) -> None:
         if status:
+            status.set_ui_guide(text=message)
             status.log(message)
         else:
             print(message)
@@ -282,6 +288,9 @@ def run_listener_session(
     started_at_ts = status.snapshot().started_at if status else time.time()
 
     items = load_catalog(catalog_path)
+
+    if status:
+        status.set_experiment(experiment_id=str(experiment_id), mode=str(mode))
 
     if trace:
         trace.write(
@@ -323,6 +332,7 @@ def run_listener_session(
             "event_queue": net_events,
             "conn_state": talker_conn,
             "log": emit,
+            "status": status,
             "trace": trace,
         },
         daemon=True,
@@ -798,15 +808,15 @@ def run_listener_session(
         ids = ids[: int(max(1, human_choice_count))]
         key_map = {str(i + 1): items_by_id[x] for i, x in enumerate(ids) if x in items_by_id}
 
-        def _human_help() -> str:
-            lines = []
+        def _human_help_lines() -> list[str]:
+            lines: list[str] = []
             for k, it in key_map.items():
-                lines.append(f"{k}: {it.text} (id={it.id}, category={it.directory}, strength={it.strength})")
+                lines.append(f"{k}: {it.text} (id={it.id})")
             lines.append("入力: 1-9 / id / all / help / q")
             lines.append("補足: Enter で確定します")
-            return "\n".join(lines)
+            return lines
 
-        def _human_all() -> str:
+        def _human_all_lines() -> list[str]:
             by_dir: Dict[str, list] = {}
             dir_order: list[str] = []
             for it in items:
@@ -819,9 +829,13 @@ def run_listener_session(
                 lines.append(f"{d}:")
                 for it in by_dir.get(d, []):
                     lines.append(f"  {it.id}: {it.text} (strength={it.strength})")
-            return "\n".join(lines)
+            return lines
 
-        emit(_human_help())
+        if status:
+            status.set_human_menu(lines=_human_help_lines())
+            status.set_ui_guide(text="人間モード: 番号か id を入力して Enter で確定します")
+        else:
+            emit("\n".join(_human_help_lines()))
 
         def _human_input_loop() -> None:
             while True:
@@ -836,10 +850,18 @@ def run_listener_session(
                     emit("人間入力を終了します。")
                     return
                 if line in ("h", "help", "?"):
-                    emit(_human_help())
+                    if status:
+                        status.set_human_menu(lines=_human_help_lines())
+                        status.set_ui_guide(text="人間モード: 番号か id を入力して Enter で確定します")
+                    else:
+                        emit("\n".join(_human_help_lines()))
                     continue
                 if line in ("a", "all", "list"):
-                    emit(_human_all())
+                    if status:
+                        status.set_human_menu(lines=_human_all_lines())
+                        status.set_ui_guide(text="人間モード: 全候補を表示しています")
+                    else:
+                        emit("\n".join(_human_all_lines()))
                     continue
 
                 item = key_map.get(line) or items_by_id.get(line)
@@ -850,9 +872,6 @@ def run_listener_session(
                 if time.time() - last_backchannel_play < backchannel_cooldown_sec:
                     emit("クールダウン中です。少し待ってください。")
                     continue
-
-                if trace:
-                    trace.write({"type": "human_choice", "input": line, "selected_id": item.id, "selected_text": item.text})
 
                 ap = find_audio_file(audio_dir, item) if local_backchannel_play else None
                 play_backchannel(

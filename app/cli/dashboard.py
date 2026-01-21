@@ -18,7 +18,104 @@ def _fmt_age(ts: Optional[float], now: float) -> str:
     return str(timedelta(seconds=int(sec)))
 
 
-def _render(status: SessionStatus):
+def _render_participant(status: SessionStatus):
+    from rich.align import Align
+    from rich.layout import Layout
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    now = time.time()
+
+    guide = status.ui.guide.strip() if status.ui.guide else "（準備中）"
+    guide_age = _fmt_age(status.ui.guide_ts, now)
+    guide_panel = Panel(Text(guide, overflow="fold", no_wrap=False), title=f"Guide (age={guide_age})", border_style="yellow")
+
+    info = Table.grid(padding=(0, 1))
+    info.add_column(style="bold")
+    info.add_column()
+    info.add_row("experiment", status.ui.experiment_id or "-")
+    info.add_row("mode", status.ui.mode or "-")
+    if status.ui.talker_connected:
+        info.add_row("talker", f"connected {status.ui.talker_addr}".strip())
+    else:
+        info.add_row("talker", "not connected")
+    info.add_row("imu_age", _fmt_age(status.imu.last_ts, now))
+    if status.imu.last_human_signal:
+        info.add_row("signal", Text(status.imu.last_human_signal, overflow="fold", no_wrap=False))
+    info_panel = Panel(info, title="Status", border_style="magenta")
+
+    transcript_body = Text("", overflow="fold", no_wrap=False)
+    if status.transcript.current_text:
+        t = status.transcript.current_t_sec
+        t_str = f"[{t:04d}s]" if t is not None else ""
+        transcript_body.append(f"再生中 {t_str}\n", style="bold")
+        transcript_body.append(status.transcript.current_text)
+    else:
+        if status.transcript.last_boundary_text:
+            t = status.transcript.last_boundary_t_sec
+            t_str = f"[{t:04d}s]" if t is not None else ""
+            transcript_body.append(f"直近の区切り {t_str}\n", style="bold")
+            transcript_body.append(status.transcript.last_boundary_text)
+        else:
+            transcript_body.append("（文字起こし待ち）")
+    if status.transcript.spoken_tail:
+        transcript_body.append("\n\n直近:\n", style="bold")
+        for line in status.transcript.spoken_tail[-4:]:
+            transcript_body.append("・")
+            transcript_body.append(line)
+            transcript_body.append("\n")
+    transcript_panel = Panel(transcript_body, title="Transcript", border_style="cyan")
+
+    decision = Table.grid(padding=(0, 1))
+    decision.add_column(style="bold")
+    decision.add_column()
+    decision.add_row("choice", status.agent.last_choice_id or "-")
+    if status.agent.last_choice_text:
+        decision.add_row("text", Text(status.agent.last_choice_text, overflow="fold", no_wrap=False))
+    if status.agent.last_reason:
+        decision.add_row("reason", Text(status.agent.last_reason, overflow="fold", no_wrap=False))
+    decision.add_row("age", _fmt_age(status.agent.last_ts, now))
+    decision_panel = Panel(decision, title="Decision", border_style="green")
+
+    menu_lines = [x for x in (status.ui.human_menu or []) if isinstance(x, str) and x.strip()]
+    menu_panel = None
+    if menu_lines:
+        menu_panel = Panel(Text("\n".join(menu_lines), overflow="fold", no_wrap=False), title="Human menu", border_style="white")
+
+    logs = status.logs[-8:] if status.logs else []
+    log_text = Text("\n".join(logs) if logs else "（ログなし）", overflow="fold", no_wrap=False)
+    log_panel = Panel(log_text, title="Log", border_style="white")
+
+    layout = Layout()
+    layout.split_column(
+        Layout(name="guide", size=8),
+        Layout(name="body", ratio=1),
+        Layout(name="log", size=10),
+    )
+    layout["guide"].update(guide_panel)
+
+    layout["body"].split_row(
+        Layout(name="transcript", ratio=2),
+        Layout(name="side", ratio=1),
+    )
+    layout["transcript"].update(transcript_panel)
+
+    if menu_panel is None:
+        layout["side"].split_column(Layout(name="info", ratio=1), Layout(name="decision", ratio=1))
+        layout["side"]["info"].update(info_panel)
+        layout["side"]["decision"].update(decision_panel)
+    else:
+        layout["side"].split_column(Layout(name="info", ratio=1), Layout(name="menu", ratio=1), Layout(name="decision", ratio=1))
+        layout["side"]["info"].update(info_panel)
+        layout["side"]["menu"].update(menu_panel)
+        layout["side"]["decision"].update(decision_panel)
+
+    layout["log"].update(log_panel)
+    return Align.center(layout, vertical="top")
+
+
+def _render_debug(status: SessionStatus):
     from rich.align import Align
     from rich.layout import Layout
     from rich.panel import Panel
@@ -129,17 +226,21 @@ def _render(status: SessionStatus):
     return Align.center(layout, vertical="top")
 
 
-def run_dashboard(status_store: StatusStore, *, refresh_hz: int = 12) -> None:
+def run_dashboard(status_store: StatusStore, *, ui_mode: str = "debug", refresh_hz: int = 12) -> None:
     from rich.console import Console
     from rich.live import Live
 
     console = Console()
+    mode_norm = str(ui_mode or "debug").strip().lower()
+    if mode_norm not in ("participant", "debug"):
+        mode_norm = "debug"
     with Live(
-        _render(status_store.snapshot()),
+        (_render_participant(status_store.snapshot()) if mode_norm == "participant" else _render_debug(status_store.snapshot())),
         console=console,
         refresh_per_second=refresh_hz,
         screen=True,
     ) as live:
         while True:
-            live.update(_render(status_store.snapshot()))
+            s = status_store.snapshot()
+            live.update(_render_participant(s) if mode_norm == "participant" else _render_debug(s))
             time.sleep(1.0 / max(1, refresh_hz))
