@@ -166,7 +166,7 @@ def main() -> None:
                 if isinstance(wm, int):
                     row.wait_ms = wm
 
-        elif ev_type == "backchannel_sent":
+        elif ev_type in ("backchannel_sent", "backchannel"):
             row.listener_sent_ts = float(ev.get("ts", row.listener_sent_ts or 0.0))
             row.planned = bool(ev.get("planned")) if "planned" in ev else row.planned
             row.selected_id = str(ev.get("id", "") or "").strip() or row.selected_id
@@ -276,4 +276,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

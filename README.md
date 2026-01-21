@@ -14,6 +14,7 @@
 - 話し手側で `ffmpeg` が実行できる
 - 聞き手側で話し手の音声を聞きたい場合は `ffplay` が実行できる（`ffmpeg` を入れると一緒に入ります）
 - `data/catalog.tsv` と `data/backchannel/` がある（相槌の候補と音声）
+- 今回（頷き/首振り）のカタログは `positive` / `negative` の2種類だけを使います（音声は `data/backchannel/positive/` と `data/backchannel/negative/`）
 
 ## 何をどちらで起動するか
 
@@ -60,7 +61,7 @@ uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.js
 相槌の比較モードを変える場合は `--mode` を使います。
 
 - `--mode llm`（既定）: IMU とモデルで相槌を決めます
-- `--mode human`: 端末に表示される一覧を見て、キー入力で相槌を送ります
+- `--mode human`: 端末に表示される一覧を見て、番号（または id）を入力して Enter で確定します
 - `--mode none`: 相槌を返しません
 
 ### 2) 話し手側（マイク端末）を起動する

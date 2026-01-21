@@ -634,6 +634,7 @@ def run_listener_session(
     last_backchannel_text = ""
     recent_ids: list[str] = []
     recent_texts: list[str] = []
+    warned_no_talker = False
 
     def send_backchannel(
         *,
@@ -644,6 +645,7 @@ def run_listener_session(
         call_id: str,
         planned: bool,
     ) -> bool:
+        nonlocal warned_no_talker
         if not send_backchannel_to_talker:
             return False
         payload: Dict[str, object] = {
@@ -661,11 +663,19 @@ def run_listener_session(
             sock = talker_conn.sock
             addr = talker_conn.addr
             if sock is None:
+                if not warned_no_talker:
+                    emit("話し手(talker)が未接続なので、相槌を送れません。")
+                    warned_no_talker = True
+                    if trace:
+                        trace.write({"type": "backchannel_send_skipped", "reason": "no_talker"})
                 return False
             try:
                 send_jsonl(sock, payload)
                 if trace:
-                    trace.write({"type": "backchannel_sent", "addr": addr, **payload})
+                    ev = dict(payload)
+                    ev["type"] = "backchannel_sent"
+                    ev["addr"] = addr
+                    trace.write(ev)
                 return True
             except Exception as exc:
                 emit(f"相槌の送信に失敗しました: {exc}")
@@ -957,29 +967,8 @@ def run_listener_session(
                 if debug_signal or debug_agent:
                     emit(f"保留: {hint} (最大{float(human_signal_hold_sec):g}秒)")
 
-        # 期限切れで保留を落とす
-        if pending is not None:
-            deadline_ts = pending.get("deadline_ts")
-            if isinstance(deadline_ts, (int, float)) and now > float(deadline_ts):
-                if debug_signal or debug_agent:
-                    emit("保留: 期限切れで見送ります")
-                if trace:
-                    trace.write(
-                        {
-                            "type": "pending_expired",
-                            "signal_ts": pending.get("signal_ts"),
-                            "deadline_ts": pending.get("deadline_ts"),
-                            "early_called": bool(pending.get("early_called", False)),
-                            "deadline_called": bool(pending.get("deadline_called", False)),
-                            "wait_used": bool(pending.get("wait_used", False)),
-                            "planned": pending.get("planned"),
-                            "planned_armed": bool(pending.get("planned_armed", False)),
-                        }
-                    )
-                pending = None
-
         # planned を boundary で armed にする
-        if pending is not None and boundary_event:
+        if pending is not None and (boundary_event or speaker_pause_like_boundary):
             if pending.get("planned") is not None and not bool(pending.get("planned_armed", False)):
                 pending["planned_armed"] = True
                 pending["planned_armed_ts"] = time.time()
@@ -1033,6 +1022,27 @@ def run_listener_session(
                 continue
             pending = None
             continue
+
+        # 期限切れで保留を落とす（planned 再生を優先する）
+        if pending is not None:
+            deadline_ts = pending.get("deadline_ts")
+            if isinstance(deadline_ts, (int, float)) and now > float(deadline_ts):
+                if debug_signal or debug_agent:
+                    emit("保留: 期限切れで見送ります")
+                if trace:
+                    trace.write(
+                        {
+                            "type": "pending_expired",
+                            "signal_ts": pending.get("signal_ts"),
+                            "deadline_ts": pending.get("deadline_ts"),
+                            "early_called": bool(pending.get("early_called", False)),
+                            "deadline_called": bool(pending.get("deadline_called", False)),
+                            "wait_used": bool(pending.get("wait_used", False)),
+                            "planned": pending.get("planned"),
+                            "planned_armed": bool(pending.get("planned_armed", False)),
+                        }
+                    )
+                pending = None
 
         # 呼び出し要否
         if pending is None:
@@ -1131,9 +1141,9 @@ def run_listener_session(
         hint = human_signal.get("gesture_hint")
         if isinstance(hint, str):
             if hint == "nod":
-                directory_allowlist = ["understanding", "agreement"]
+                directory_allowlist = ["positive"]
             elif hint == "shake":
-                directory_allowlist = ["question", "disagreement"]
+                directory_allowlist = ["negative"]
 
         avoid_ids = recent_ids[-2:] if recent_ids else []
 
@@ -1274,6 +1284,12 @@ def run_listener_session(
                 "wait_ms": int(wait_ms),
             }
             pending["planned_after_ts"] = time.time() + max(0.0, float(wait_ms) / 1000.0)
+            # モデルが遅いときでも、planned をすぐ期限切れにしないための猶予
+            try:
+                cur_deadline = float(pending.get("deadline_ts", 0.0))
+            except Exception:
+                cur_deadline = 0.0
+            pending["deadline_ts"] = max(cur_deadline, float(pending["planned_after_ts"]) + 1.0)
             pending["planned_armed"] = False
             pending["planned_armed_ts"] = 0.0
             if trace:
