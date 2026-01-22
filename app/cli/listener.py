@@ -75,7 +75,7 @@ def main() -> None:
     parser.add_argument("--local-backchannel-play", action="store_true")
 
     parser.add_argument("--calibration-still-sec", type=float, default=0.0)
-    parser.add_argument("--calibration-start-delay-sec", type=float, default=3.0)
+    parser.add_argument("--calibration-start-delay-sec", type=float, default=10.0)
     parser.add_argument("--calibration-active-sec", type=float, default=10.0)
     parser.add_argument("--calibration-between-sec", type=float, default=0.0)
     parser.add_argument("--calibration-wait-for-imu-sec", type=float, default=15.0)

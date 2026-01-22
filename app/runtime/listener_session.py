@@ -398,6 +398,14 @@ def run_listener_session(
             if trace:
                 trace.log(message, source="print")
 
+    def log_only(message: str) -> None:
+        if status:
+            status.log(message)
+        else:
+            print(message)
+            if trace:
+                trace.log(message, source="print")
+
     started_at_ts = status.snapshot().started_at if status else time.time()
 
     items = load_catalog(catalog_path)
@@ -454,7 +462,7 @@ def run_listener_session(
     # 文字起こしの受信は、IMUの計測より先に待ち受けを開始しておく（talker が先に起動しても接続できるように）
     talker_conn = TalkerConnection()
     talker_guide_state = TalkerGuideState()
-    talker_guide_state.set("聞き手が準備中です。しばらく待ってください。")
+    talker_guide_state.set("聞き手が話し手の接続を待っています。まだ話さずに待ってください。")
     net_events: queue.Queue = queue.Queue()
     threading.Thread(
         target=transcript_server_loop,
@@ -464,7 +472,7 @@ def run_listener_session(
             "experiment_id": str(experiment_id),
             "event_queue": net_events,
             "conn_state": talker_conn,
-            "log": emit,
+            "log": log_only,
             "status": status,
             "guide_state": talker_guide_state,
             "trace": trace,
@@ -499,6 +507,9 @@ def run_listener_session(
         _send_to_talker({"type": "guide", "text": msg, "ts_ms": int(_now_ms())})
         last_talker_guide_text = msg
         last_talker_guide_ts = float(now_ts)
+
+    emit("話し手の接続を待っています。話し手アプリを起動してください。")
+    _broadcast_guide_to_talker("聞き手が話し手の接続を待っています。まだ話さずに待ってください。")
 
     # 話し手音声（ネットワーク）を受け取り、すぐ再生しつつ、無音区切りで文字起こしする
     transcript_events: queue.Queue = queue.Queue()
@@ -1163,10 +1174,31 @@ def run_listener_session(
             return "聞き手の測定が終わりました。もうすぐ始めます。"
 
         # 残り秒数
-        m = re.search(r"残り\\s*(\\d+)\\s*秒", msg)
-        remaining = m.group(1) if m else ""
+        remaining = ""
+        remaining_label = ""
+        m = re.search(r"残り\s*(\d+)\s*秒", msg)
+        if m:
+            remaining = m.group(1)
+            remaining_label = "残り"
+        if not remaining:
+            m = re.search(r"(\d+)\s*秒後", msg)
+            if m:
+                remaining = m.group(1)
+                remaining_label = "あと"
+        if not remaining:
+            m = re.search(r"次の計測まで\s*(\d+)\s*秒", msg)
+            if m:
+                remaining = m.group(1)
+                remaining_label = "あと"
+        if not remaining:
+            m = re.search(r"（\s*(\d+)\s*秒\s*）", msg)
+            if m:
+                remaining = m.group(1)
+                remaining_label = "残り"
 
         phase = "聞き手が測定中です。話さずに待ってください。"
+        if ("計測を始めます" in msg) and ("秒後" in msg):
+            phase = "聞き手が測定の準備中です。話さずに待ってください。"
         if ("静止" in msg) or ("still" in msg):
             phase = "聞き手が静止の測定中です。話さずに待ってください。"
         elif ("普段どおり" in msg) or ("自然に動いて" in msg) or ("active" in msg):
@@ -1181,7 +1213,8 @@ def run_listener_session(
             phase = "聞き手が測定の準備中です。話さずに待ってください。"
 
         if remaining:
-            return f"{phase} 残り {remaining} 秒"
+            label = remaining_label or "残り"
+            return f"{phase} {label} {remaining} 秒"
         return phase
 
     def _emit_calibration(message: str) -> None:
@@ -1189,6 +1222,16 @@ def run_listener_session(
         talker_msg = _talker_guide_for_calibration(message)
         if talker_msg:
             _broadcast_guide_to_talker(talker_msg)
+
+    # 話し手と接続してから計測に入る（talker 側の待ち時間を揃えるため）
+    while True:
+        with talker_conn.lock:
+            connected = talker_conn.sock is not None
+        if connected:
+            break
+        time.sleep(0.1)
+    emit("接続できました。これから計測を始めます。話さずに待ってください。")
+    _broadcast_guide_to_talker("接続できました。これから計測を始めます。話さずに待ってください。")
 
     imu_calibration: ImuCalibration | None = run_calibration(
         imu_buffer,
@@ -1256,8 +1299,8 @@ def run_listener_session(
         daemon=True,
     ).start()
 
-    emit("聞き手アプリを開始しました。IMUの合図に反応して相槌を返します。")
-    _broadcast_guide_to_talker("準備ができました。話してください。")
+    emit("計測完了です。話し手が話すのを待ってください。")
+    _broadcast_guide_to_talker("計測が終わりました。話してください。")
 
     transcript = LiveTranscriptBuffer(max_lines=300)
     last_pause_like_boundary = False
@@ -1338,9 +1381,9 @@ def run_listener_session(
                 ts=time.time(),
             )
         if (not status) or debug_agent:
-            emit(f"選択: {selected_id} {selected_text}".strip())
+            log_only(f"選択: {selected_id} {selected_text}".strip())
             if debug_agent and reason:
-                emit(f"理由: {reason}")
+                log_only(f"理由: {reason}")
 
         sent = send_backchannel(
             selected_id=selected_id,
@@ -1370,7 +1413,7 @@ def run_listener_session(
         if status and audio_path is not None:
             status.set_backchannel_playback(path=audio_path, played=(sent or played_local))
         if local_backchannel_play and played_local and ((not status) or debug_agent):
-            emit(f"再生(ローカル): {audio_path}")
+            log_only(f"再生(ローカル): {audio_path}")
         if (not sent) and (not played_local):
             return False
         last_backchannel_play = time.time()
@@ -1382,13 +1425,13 @@ def run_listener_session(
 
     mode_norm = str(mode or "llm").strip().lower()
     if mode_norm not in ("llm", "human", "none"):
-        emit(f"mode が不明なので llm にします: {mode}")
+        log_only(f"mode が不明なので llm にします: {mode}")
         mode_norm = "llm"
 
     if mode_norm == "none":
-        emit("モード: none（相槌を返しません）")
+        log_only("モード: none（相槌を返しません）")
     elif mode_norm == "human":
-        emit("モード: human（キー入力で相槌を送ります）")
+        log_only("モード: human（キー入力で相槌を送ります）")
 
         items_by_id = {it.id: it for it in items}
         ids: list[str] = []
@@ -1448,7 +1491,7 @@ def run_listener_session(
             status.set_human_menu(lines=_human_help_lines())
             status.set_ui_guide(text="人間モード: 番号か id を入力して Enter で確定します")
         else:
-            emit("\n".join(_human_help_lines()))
+            log_only("\n".join(_human_help_lines()))
 
         def _human_input_loop() -> None:
             while True:
@@ -1460,26 +1503,26 @@ def run_listener_session(
                 if not line:
                     continue
                 if line in ("q", "quit", "exit"):
-                    emit("人間入力を終了します。")
+                    log_only("人間入力を終了します。")
                     return
                 if line in ("h", "help", "?"):
                     if status:
                         status.set_human_menu(lines=_human_help_lines())
                         status.set_ui_guide(text="人間モード: 番号か id を入力して Enter で確定します")
                     else:
-                        emit("\n".join(_human_help_lines()))
+                        log_only("\n".join(_human_help_lines()))
                     continue
                 if line in ("a", "all", "list"):
                     if status:
                         status.set_human_menu(lines=_human_all_lines())
                         status.set_ui_guide(text="人間モード: 全候補を表示しています")
                     else:
-                        emit("\n".join(_human_all_lines()))
+                        log_only("\n".join(_human_all_lines()))
                     continue
 
                 item = key_map.get(line) or items_by_id.get(line)
                 if item is None:
-                    emit("見つかりません。help で一覧を見てください。")
+                    log_only("見つかりません。help で一覧を見てください。")
                     continue
 
                 ap = find_audio_file(audio_dir, item) if local_backchannel_play else None
@@ -1495,7 +1538,7 @@ def run_listener_session(
 
         threading.Thread(target=_human_input_loop, daemon=True).start()
     else:
-        emit("モード: llm（IMU + モデルで相槌を決めます）")
+        log_only("モード: llm（IMU + モデルで相槌を決めます）")
 
     while True:
         boundary_event = False
@@ -1597,7 +1640,7 @@ def run_listener_session(
 
         if debug_signal or debug_agent:
             reason = str(human_signal.get("reason", ""))
-            emit(f"IMUサイン: {reason} (age={float(seconds_since_signal):.2f}s)")
+            log_only(f"IMUサイン: {reason} (age={float(seconds_since_signal):.2f}s)")
 
         directory_allowlist: list[str] = []
         hint = human_signal.get("gesture_hint")
@@ -1715,7 +1758,7 @@ def run_listener_session(
                     ts=time.time(),
                 )
             if debug_agent:
-                emit(f"選択: NONE ({reason})" if reason else "選択: NONE")
+                log_only(f"選択: NONE ({reason})" if reason else "選択: NONE")
             time.sleep(0.01)
             continue
 
