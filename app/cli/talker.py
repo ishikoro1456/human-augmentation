@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -212,6 +212,160 @@ class AudioConfig:
     frame_ms: int = 20  # 送信する1フレームの長さ（ミリ秒）
 
 
+@dataclass
+class TalkerUiState:
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    connected: bool = False
+    remote: str = ""
+    experiment_id: str = ""
+    guide: str = ""
+    guide_ts: float | None = None
+
+    mic_rms_mean_2s: float | None = None
+    mic_rms_max_2s: int | None = None
+    mic_ts: float | None = None
+
+    last_backchannel_id: str = ""
+    last_backchannel_text: str = ""
+    last_backchannel_ts: float | None = None
+    last_backchannel_played: bool | None = None
+
+    def set_connected(self, *, connected: bool, remote: str = "") -> None:
+        with self.lock:
+            self.connected = bool(connected)
+            self.remote = str(remote)
+
+    def set_experiment_id(self, exp_id: str) -> None:
+        with self.lock:
+            self.experiment_id = str(exp_id)
+
+    def set_guide(self, text: str) -> None:
+        now = time.time()
+        with self.lock:
+            self.guide = str(text)
+            self.guide_ts = float(now)
+
+    def set_mic_stats(self, *, rms_mean_2s: float, rms_max_2s: int) -> None:
+        now = time.time()
+        with self.lock:
+            self.mic_rms_mean_2s = float(rms_mean_2s)
+            self.mic_rms_max_2s = int(rms_max_2s)
+            self.mic_ts = float(now)
+
+    def set_backchannel(self, *, bid: str, text: str, played: bool | None) -> None:
+        now = time.time()
+        with self.lock:
+            self.last_backchannel_id = str(bid)
+            self.last_backchannel_text = str(text)
+            self.last_backchannel_ts = float(now)
+            self.last_backchannel_played = played
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {
+                "connected": bool(self.connected),
+                "remote": str(self.remote),
+                "experiment_id": str(self.experiment_id),
+                "guide": str(self.guide),
+                "guide_ts": self.guide_ts,
+                "mic_rms_mean_2s": self.mic_rms_mean_2s,
+                "mic_rms_max_2s": self.mic_rms_max_2s,
+                "mic_ts": self.mic_ts,
+                "last_backchannel_id": str(self.last_backchannel_id),
+                "last_backchannel_text": str(self.last_backchannel_text),
+                "last_backchannel_ts": self.last_backchannel_ts,
+                "last_backchannel_played": self.last_backchannel_played,
+            }
+
+
+def _fmt_age(ts: float | None) -> str:
+    if ts is None:
+        return "-"
+    sec = max(0.0, time.time() - float(ts))
+    if sec < 10:
+        return f"{sec:0.1f}s"
+    if sec < 60:
+        return f"{sec:0.0f}s"
+    return f"{int(sec)}s"
+
+
+def _meter(value: float | None, *, max_value: float = 2000.0, width: int = 22) -> str:
+    if value is None:
+        return "-"
+    v = max(0.0, float(value))
+    frac = min(1.0, v / float(max_value))
+    filled = int(round(frac * int(width)))
+    bar = "█" * filled + " " * (int(width) - filled)
+    return f"[{bar}] {v:.0f}"
+
+
+def _run_talker_ui(ui: TalkerUiState, *, ui_mode: str = "participant", refresh_hz: int = 12) -> None:
+    from rich.console import Console
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console()
+    mode_norm = str(ui_mode or "participant").strip().lower()
+    if mode_norm not in ("participant", "debug"):
+        mode_norm = "participant"
+
+    def render() -> Panel:
+        snap = ui.snapshot()
+        guide = (snap.get("guide") or "").strip() or "（待機中）"
+        guide_age = _fmt_age(snap.get("guide_ts"))
+        guide_panel = Panel(
+            Text(guide, overflow="fold", no_wrap=False),
+            title=f"案内 (age={guide_age})",
+            border_style="yellow",
+        )
+
+        info = Table.grid(padding=(0, 1))
+        info.add_column(style="bold")
+        info.add_column()
+        exp = str(snap.get("experiment_id") or "-").strip() or "-"
+        info.add_row("experiment", exp)
+        if bool(snap.get("connected")):
+            info.add_row("listener", f"connected {snap.get('remote','')}".strip())
+        else:
+            info.add_row("listener", "not connected")
+
+        mic_age = _fmt_age(snap.get("mic_ts"))
+        mic_mean = snap.get("mic_rms_mean_2s")
+        mic_max = snap.get("mic_rms_max_2s")
+        mean_s = _meter(mic_mean, max_value=2000.0, width=18)
+        max_s = "-" if mic_max is None else str(int(mic_max))
+        info.add_row("mic", f"age={mic_age} mean={mean_s} max={max_s}")
+        info_panel = Panel(info, title="状態", border_style="magenta")
+
+        last_id = str(snap.get("last_backchannel_id") or "").strip()
+        last_text = str(snap.get("last_backchannel_text") or "").strip()
+        last_age = _fmt_age(snap.get("last_backchannel_ts"))
+        last_played = snap.get("last_backchannel_played")
+        played_s = "-" if last_played is None else ("yes" if bool(last_played) else "no")
+        if last_id:
+            bc = f"{last_id} {last_text}\nplayed={played_s} age={last_age}"
+        else:
+            bc = "（まだ届いていません）"
+        bc_panel = Panel(Text(bc, overflow="fold", no_wrap=False), title="直近の相槌", border_style="green")
+
+        body = Table.grid(expand=True)
+        if mode_norm == "participant":
+            body.add_row(guide_panel)
+            body.add_row(info_panel)
+            return Panel(body, title="話し手", border_style="white")
+        body.add_row(guide_panel)
+        body.add_row(info_panel)
+        body.add_row(bc_panel)
+        return Panel(body, title="Talker", border_style="white")
+
+    with Live(render(), console=console, refresh_per_second=int(max(1, refresh_hz)), screen=True):
+        while True:
+            time.sleep(0.1)
+
+
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Talker app (mic -> send audio, receive backchannel)")
@@ -238,6 +392,9 @@ def main() -> None:
     parser.add_argument("--audio-dir", default="data/backchannel")
     parser.add_argument("--no-play-backchannel", action="store_true", help="Do not play received backchannel audio")
 
+    parser.add_argument("--ui", action="store_true", help="Show a simple UI for the talker")
+    parser.add_argument("--ui-mode", choices=["participant", "debug"], default="participant")
+    parser.add_argument("--ui-refresh-hz", type=int, default=12)
     parser.add_argument("--debug-net", action="store_true", help="Print network events")
     parser.add_argument("--trace-jsonl", default="", help="通信と再生のログをJSONLで残します")
 
@@ -274,6 +431,15 @@ def main() -> None:
     audio_dir = Path(args.audio_dir)
     player = AudioPlayer()
 
+    ui: TalkerUiState | None = TalkerUiState() if args.ui else None
+    if ui is not None:
+        threading.Thread(
+            target=_run_talker_ui,
+            args=(ui,),
+            kwargs={"ui_mode": str(args.ui_mode), "refresh_hz": int(args.ui_refresh_hz)},
+            daemon=True,
+        ).start()
+
     if trace:
         trace.write(
             {
@@ -308,6 +474,8 @@ def main() -> None:
                     except Exception:
                         local = None
                     trace.write({"type": "talker_connected", "remote": f"{host}:{port}", "local": local})
+                if ui is not None:
+                    ui.set_connected(connected=True, remote=f"{host}:{port}")
                 send_jsonl(
                     s,
                     {
@@ -325,10 +493,14 @@ def main() -> None:
                 )
                 if trace:
                     trace.write({"type": "hello_sent", "remote": f"{host}:{port}"})
-                print(f"接続しました: {host}:{port}")
+                if not args.ui:
+                    print(f"接続しました: {host}:{port}")
                 return s
             except Exception as exc:
-                print(f"接続に失敗しました: {host}:{port} ({exc})")
+                if not args.ui:
+                    print(f"接続に失敗しました: {host}:{port} ({exc})")
+                if ui is not None:
+                    ui.set_connected(connected=False, remote=f"{host}:{port}")
                 time.sleep(1.0)
 
     def _drop_connection() -> None:
@@ -343,12 +515,16 @@ def main() -> None:
                 pass
         if trace:
             trace.write({"type": "talker_disconnected"})
+        if ui is not None:
+            ui.set_connected(connected=False, remote=f"{host}:{port}")
 
-    print(f"接続を待ちます: {host}:{port}")
+    if not args.ui:
+        print(f"接続を待ちます: {host}:{port}")
     _ensure_connected()
 
     def _recv_loop() -> None:
         nonlocal experiment_id
+        last_guide_print = ""
         while True:
             s = _ensure_connected()
             try:
@@ -363,20 +539,33 @@ def main() -> None:
                             if trace:
                                 trace.set_meta(experiment_id=experiment_id)
                                 trace.write({"type": "session_received", "experiment_id": experiment_id})
+                            if ui is not None:
+                                ui.set_experiment_id(experiment_id)
                             if args.debug_net:
-                                print(f"受信(session): experiment_id={experiment_id}")
+                                if not args.ui:
+                                    print(f"受信(session): experiment_id={experiment_id}")
+                        continue
+                    if msg_type == "guide":
+                        text = str(msg.get("text", "") or "").strip()
+                        if text and ui is not None:
+                            ui.set_guide(text)
+                        if text and (not args.ui) and text != last_guide_print:
+                            print(f"案内: {text}")
+                            last_guide_print = text
                         continue
 
                     if msg_type != "backchannel":
                         if args.debug_net:
-                            print(f"受信: {msg}")
+                            if not args.ui:
+                                print(f"受信: {msg}")
                         continue
                     bid = str(msg.get("id", "") or "")
                     if not bid:
                         continue
                     btext = str(msg.get("text", "") or "")
                     if args.debug_net:
-                        print(f"受信(backchannel): {bid} {btext}".strip())
+                        if not args.ui:
+                            print(f"受信(backchannel): {bid} {btext}".strip())
                     reason = str(msg.get("reason", "") or "")
                     planned = bool(msg.get("planned", False))
                     latency_ms = msg.get("latency_ms")
@@ -394,14 +583,22 @@ def main() -> None:
                             }
                         )
                     if args.no_play_backchannel:
+                        if ui is not None:
+                            ui.set_backchannel(bid=bid, text=btext, played=None)
                         continue
                     item = next((it for it in items if it.id == bid), None)
                     if item is None:
+                        if ui is not None:
+                            ui.set_backchannel(bid=bid, text=btext, played=None)
                         continue
                     path = find_audio_file(audio_dir, item)
                     if not path:
+                        if ui is not None:
+                            ui.set_backchannel(bid=bid, text=btext, played=None)
                         continue
-                    played = player.play_effect(path)
+                    played = player.play_effect(path, interrupt=True)
+                    if ui is not None:
+                        ui.set_backchannel(bid=bid, text=btext, played=played)
                     if trace:
                         trace.write(
                             {
@@ -415,7 +612,8 @@ def main() -> None:
                         )
             except Exception as exc:
                 if args.debug_net:
-                    print(f"受信が切れました（再接続します）: {exc}")
+                    if not args.ui:
+                        print(f"受信が切れました（再接続します）: {exc}")
                 _drop_connection()
                 time.sleep(0.2)
     threading.Thread(target=_recv_loop, daemon=True).start()
@@ -443,7 +641,8 @@ def main() -> None:
     if proc.stdout is None:
         raise RuntimeError("ffmpegのstdoutが取れません。")
 
-    print("マイク取り込みを開始しました。止めるには Ctrl+C です。")
+    if not args.ui:
+        print("マイク取り込みを開始しました。止めるには Ctrl+C です。")
     try:
         frame_samples = int(audio_cfg.sample_rate * audio_cfg.frame_ms / 1000)
         frame_bytes = frame_samples * 2
@@ -478,20 +677,24 @@ def main() -> None:
                 send_jsonl(s, payload)
             except Exception as exc:
                 if args.debug_net:
-                    print(f"送信に失敗しました（再接続します）: {exc}")
+                    if not args.ui:
+                        print(f"送信に失敗しました（再接続します）: {exc}")
                 _drop_connection()
 
-            if trace and (time.time() - stats_started) >= 2.0:
+            if (time.time() - stats_started) >= 2.0:
                 mean = (stats_rms_sum / stats_frames) if stats_frames > 0 else 0.0
-                trace.write(
-                    {
-                        "type": "audio_send_stats",
-                        "frames": int(stats_frames),
-                        "bytes": int(stats_bytes),
-                        "rms_mean": round(float(mean), 1),
-                        "rms_max": int(stats_rms_max),
-                    }
-                )
+                if trace:
+                    trace.write(
+                        {
+                            "type": "audio_send_stats",
+                            "frames": int(stats_frames),
+                            "bytes": int(stats_bytes),
+                            "rms_mean": round(float(mean), 1),
+                            "rms_max": int(stats_rms_max),
+                        }
+                    )
+                if ui is not None:
+                    ui.set_mic_stats(rms_mean_2s=float(mean), rms_max_2s=int(stats_rms_max))
                 stats_started = time.time()
                 stats_frames = 0
                 stats_bytes = 0

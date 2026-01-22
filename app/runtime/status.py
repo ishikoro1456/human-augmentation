@@ -56,6 +56,12 @@ class AudioStatus:
     last_backchannel_path: Optional[Path] = None
     last_backchannel_played: Optional[bool] = None
     last_transcript_path: Optional[Path] = None
+    speaker_playback_enabled: bool = True
+    speaker_playback_started: bool = False
+    speaker_last_audio_ts: Optional[float] = None
+    speaker_last_rms: Optional[int] = None
+    speaker_rms_mean_2s: Optional[float] = None
+    speaker_rms_max_2s: Optional[int] = None
 
 
 @dataclass
@@ -223,3 +229,21 @@ class StatusStore:
         with self._lock:
             self._status.audio.last_backchannel_path = None
             self._status.audio.last_backchannel_played = None
+
+    def set_speaker_audio(
+        self,
+        *,
+        playback_enabled: bool,
+        playback_started: bool,
+        rms_last: Optional[int],
+        rms_mean_2s: Optional[float],
+        rms_max_2s: Optional[int],
+        ts: float,
+    ) -> None:
+        with self._lock:
+            self._status.audio.speaker_playback_enabled = bool(playback_enabled)
+            self._status.audio.speaker_playback_started = bool(playback_started)
+            self._status.audio.speaker_last_audio_ts = float(ts)
+            self._status.audio.speaker_last_rms = None if rms_last is None else int(rms_last)
+            self._status.audio.speaker_rms_mean_2s = None if rms_mean_2s is None else float(rms_mean_2s)
+            self._status.audio.speaker_rms_max_2s = None if rms_max_2s is None else int(rms_max_2s)

@@ -178,6 +178,24 @@ def build_backchannel_graph(
         if not transcript_context:
             transcript_context = "文字起こしはまだありません"
 
+        motion_summary = _extract_motion_summary(state["imu"])
+        gesture_hint = str(motion_summary.get("gesture_hint", "other"))
+
+        # 間を置かずに返したいケースは、モデルを呼ばずに即決する
+        if speaker_speaking:
+            if gesture_hint == "shake":
+                return {"selection": {"id": "NONE", "reason": "話中なので見送り"}, "errors": state.get("errors", [])}
+            if gesture_hint == "nod":
+                short_candidates = [
+                    c
+                    for c in candidates
+                    if isinstance(c, dict)
+                    and isinstance(c.get("strength"), int)
+                    and int(c.get("strength")) <= 1
+                ]
+                chosen = short_candidates[0]["id"] if short_candidates else (candidates[0]["id"] if candidates else "NONE")
+                return {"selection": {"id": str(chosen), "reason": "話中は短く返す"}, "errors": state.get("errors", [])}
+
         system_text = (
             "あなたは相槌の選択役です。\n"
             "返すのに良いタイミングなら、候補から1つ選びます。\n"
@@ -190,9 +208,6 @@ def build_backchannel_graph(
             "- その場合は、内容に踏み込まない短いものにしてください\n"
             "- reason は20文字以内で書いてください"
         )
-
-        motion_summary = _extract_motion_summary(state["imu"])
-        gesture_hint = str(motion_summary.get("gesture_hint", "other"))
 
         prompt = (
             "【状況】\n"

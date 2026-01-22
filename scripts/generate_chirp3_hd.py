@@ -117,6 +117,18 @@ def main() -> None:
         ext = args.encoding
         filename = f"{row_id}_s{strength}_n{nod}_{slug}.{ext}"
         out_path = os.path.join(out_dir, filename)
+        prefix = f"{row_id}_s{strength}_n{nod}_"
+
+        # 同じ prefix の古い音声を掃除（text が変わるとファイル名が変わるので、残ると選択が不安定になる）
+        try:
+            for old in os.listdir(out_dir):
+                if old.startswith(prefix) and old != filename:
+                    try:
+                        os.remove(os.path.join(out_dir, old))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
         audio_content = synthesize_one(
             client=client,

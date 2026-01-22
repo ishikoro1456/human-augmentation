@@ -40,6 +40,14 @@ def _render_participant(status: SessionStatus):
         info.add_row("talker", f"connected {status.ui.talker_addr}".strip())
     else:
         info.add_row("talker", "not connected")
+    if status.audio.speaker_last_audio_ts is not None:
+        age = _fmt_age(status.audio.speaker_last_audio_ts, now)
+        rms_last = "-" if status.audio.speaker_last_rms is None else str(status.audio.speaker_last_rms)
+        play = "on" if status.audio.speaker_playback_enabled else "off"
+        started = "yes" if status.audio.speaker_playback_started else "no"
+        info.add_row("speaker_audio", f"age={age} rms={rms_last} play={play}/{started}")
+    else:
+        info.add_row("speaker_audio", "-")
     info.add_row("imu_age", _fmt_age(status.imu.last_ts, now))
     if status.imu.last_human_signal:
         info.add_row("signal", Text(status.imu.last_human_signal, overflow="fold", no_wrap=False))
@@ -173,6 +181,14 @@ def _render_debug(status: SessionStatus):
         sensors_table.add_row("age_g", _fold(_fmt_age(status.calibration.gesture_finished_at, now)))
 
     sensors_table.add_row("imu_age", _fold(_fmt_age(status.imu.last_ts, now)))
+    if status.audio.speaker_last_audio_ts is not None:
+        age = _fmt_age(status.audio.speaker_last_audio_ts, now)
+        rms_last = "-" if status.audio.speaker_last_rms is None else str(status.audio.speaker_last_rms)
+        rms_mean = "-" if status.audio.speaker_rms_mean_2s is None else f"{status.audio.speaker_rms_mean_2s:.1f}"
+        rms_max = "-" if status.audio.speaker_rms_max_2s is None else str(status.audio.speaker_rms_max_2s)
+        play = "on" if status.audio.speaker_playback_enabled else "off"
+        started = "yes" if status.audio.speaker_playback_started else "no"
+        sensors_table.add_row("spk_audio", _fold(f"age={age} rms={rms_last} mean={rms_mean} max={rms_max} play={play}/{started}"))
     imu_text = status.imu.last_motion_text.strip() if status.imu.last_motion_text else "-"
     sensors_table.add_row("imu_raw", _fold(imu_text))
     if status.imu.last_human_signal:
