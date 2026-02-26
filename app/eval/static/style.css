@@ -1,0 +1,466 @@
+/* ── Reset / Base ───────────────────────── */
+:root {
+  --header-h: 52px;
+  --panel-gap: 1rem;
+  --timeline-w: 38%;
+  --color-nod: #2a9d8f;
+  --color-shake: #e76f51;
+  --color-other: #999;
+  --color-active-bg: #fff3cd;
+  --color-active-border: #f0a500;
+  --color-done-bg: #f0f9f0;
+  --color-done-border: #6ab04c;
+  --color-none: #9b9b9b;
+  --color-positive: #2a9d8f;
+  --color-negative: #e76f51;
+}
+
+/* ── Eval Header ─────────────────────── */
+.eval-header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: var(--header-h);
+  background: var(--pico-background-color);
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+}
+.eval-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 0 1.2rem;
+}
+.back-link {
+  text-decoration: none;
+  color: var(--pico-secondary);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.progress-area {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+.progress-area progress {
+  flex: 1;
+  height: 8px;
+  margin: 0;
+}
+.progress-label, .progress-pct {
+  font-size: 0.85rem;
+  white-space: nowrap;
+  color: var(--pico-muted-color);
+}
+.session-id {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+  white-space: nowrap;
+}
+
+/* ── 2-Column Layout ─────────────────── */
+.eval-layout {
+  display: grid;
+  grid-template-columns: var(--timeline-w) 1fr;
+  height: calc(100vh - var(--header-h));
+  margin-top: var(--header-h);
+  overflow: hidden;
+}
+
+/* ── Timeline Panel (left) ───────────── */
+.timeline-panel {
+  overflow-y: scroll;
+  padding: 1rem 0.8rem;
+  border-right: 1px solid var(--pico-muted-border-color);
+  background: var(--pico-card-sectioning-background-color);
+}
+.panel-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pico-muted-color);
+  margin: 0 0 0.8rem;
+}
+
+/* speech segment */
+.segment {
+  font-size: 0.85rem;
+  color: var(--pico-color);
+  padding: 0.25rem 0.4rem;
+  line-height: 1.5;
+}
+
+/* agent decision card */
+.agent-card {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  margin: 0.3rem 0;
+  border-radius: 6px;
+  border: 1.5px solid var(--pico-muted-border-color);
+  background: var(--pico-background-color);
+  text-decoration: none;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.agent-card:hover {
+  border-color: var(--pico-primary);
+}
+.agent-card.active {
+  border-color: var(--color-active-border);
+  background: var(--color-active-bg);
+}
+.agent-card.done {
+  border-color: var(--color-done-border);
+  background: var(--color-done-bg);
+}
+.card-num {
+  color: var(--pico-muted-color);
+  min-width: 2rem;
+  font-size: 0.75rem;
+}
+.card-gesture {
+  color: var(--pico-muted-color);
+  font-size: 0.78rem;
+}
+.card-result {
+  font-weight: 600;
+  flex: 1;
+}
+.card-result.none {
+  color: var(--color-none);
+  font-weight: normal;
+}
+.done-mark {
+  color: var(--color-done-border);
+  font-size: 0.8rem;
+}
+
+/* ── Detail Panel (right) ────────────── */
+.detail-panel {
+  overflow-y: auto;
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* decision detail */
+.decision-detail {
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.detail-label {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.detail-value {
+  font-size: 0.95rem;
+}
+.detail-value.gesture-nod { color: var(--color-nod); }
+.detail-value.gesture-shake { color: var(--color-shake); }
+.detail-value.none-value { color: var(--color-none); }
+.detail-value .score {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+  margin-left: 0.4rem;
+}
+.detail-value.reason {
+  font-style: italic;
+}
+
+/* context collapsible */
+.context-details summary {
+  font-size: 0.8rem;
+  color: var(--pico-muted-color);
+  cursor: pointer;
+}
+.context-box {
+  background: var(--pico-card-sectioning-background-color);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin-top: 0.4rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.context-line {
+  font-size: 0.83rem;
+  margin: 0.1rem 0;
+  padding: 0.1rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  color: var(--pico-muted-color);
+}
+.context-line.highlight {
+  color: var(--pico-color);
+  font-weight: 600;
+}
+
+/* ── Evaluation Form ─────────────────── */
+.eval-form-wrapper {
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+}
+
+/* Likert scale */
+.likert-fieldset {
+  border: none;
+  padding: 0;
+  margin-bottom: 1.2rem;
+}
+.likert-fieldset legend {
+  font-weight: 600;
+  margin-bottom: 0.8rem;
+}
+.likert-fieldset legend small {
+  font-weight: normal;
+  color: var(--pico-muted-color);
+  margin-left: 0.3rem;
+}
+.likert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.likert-anchor {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+  text-align: center;
+  line-height: 1.3;
+  min-width: 3rem;
+}
+.likert-options {
+  display: flex;
+  gap: 0.2rem;
+  flex: 1;
+  justify-content: space-evenly;
+}
+.likert-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  cursor: pointer;
+}
+.likert-label input[type="radio"] {
+  width: 1.3rem;
+  height: 1.3rem;
+  margin: 0;
+  cursor: pointer;
+}
+.likert-num {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+}
+
+/* Issues */
+.issues-fieldset {
+  border: none;
+  padding: 0;
+  margin-bottom: 1.2rem;
+}
+.issues-fieldset legend {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.issues-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem 1rem;
+}
+.issue-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.issue-label input { margin: 0; }
+
+/* Alternative selection */
+.alt-fieldset {
+  border: none;
+  padding: 0;
+  margin-bottom: 1.2rem;
+}
+.alt-fieldset legend {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.alt-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.alt-label {
+  cursor: pointer;
+}
+.alt-label input { display: none; }
+.alt-text {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border: 1.5px solid var(--pico-muted-border-color);
+  border-radius: 20px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.alt-text:hover { border-color: var(--pico-primary); }
+.alt-label input:checked + .alt-text {
+  background: var(--pico-primary);
+  border-color: var(--pico-primary);
+  color: white;
+}
+.alt-text.skip { color: var(--pico-muted-color); }
+.alt-text.none { color: var(--color-none); }
+.alt-text.positive { color: var(--color-positive); }
+.alt-text.negative { color: var(--color-negative); }
+
+/* Comment */
+label[for="comment"] {
+  font-weight: 600;
+  font-size: 0.88rem;
+  margin-bottom: 1rem;
+}
+
+/* Navigation buttons */
+.nav-buttons {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+}
+.nav-btn {
+  min-width: 120px;
+  text-align: center;
+}
+.primary-btn {
+  background: var(--pico-primary);
+  color: white;
+  border: none;
+  border-radius: var(--pico-border-radius);
+  padding: 0.6rem 1.5rem;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.primary-btn:hover { opacity: 0.9; }
+
+/* keyboard hint */
+.keyboard-hint {
+  font-size: 0.72rem;
+  color: var(--pico-muted-color);
+  text-align: center;
+  margin-top: 0.5rem;
+}
+kbd {
+  font-size: 0.72rem;
+  background: var(--pico-muted-border-color);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+/* ── Complete page stats ─────────────── */
+.stats-card {
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  text-align: left;
+}
+.stats-main {
+  font-size: 1.3rem;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 1.2rem;
+}
+.dist-chart { margin: 0.8rem 0; }
+.dist-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+.dist-label {
+  width: 1.2rem;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--pico-muted-color);
+}
+.dist-bar-wrap {
+  flex: 1;
+  height: 16px;
+  background: var(--pico-muted-border-color);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.dist-bar {
+  height: 100%;
+  background: var(--pico-primary);
+  border-radius: 3px;
+  min-width: 2px;
+  transition: width 0.3s;
+}
+.dist-count {
+  width: 2rem;
+  font-size: 0.82rem;
+  color: var(--pico-muted-color);
+}
+.stats-avg, .stats-time {
+  text-align: center;
+  margin-top: 0.8rem;
+  font-size: 0.9rem;
+}
+
+/* ── Session list extras ─────────────── */
+.evaluator-section {
+  margin-bottom: 1.5rem;
+}
+.muted {
+  color: var(--pico-muted-color);
+  margin-bottom: 1.5rem;
+}
+
+/* ── Responsive ──────────────────────── */
+@media (max-width: 900px) {
+  .eval-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+  }
+  .timeline-panel {
+    max-height: 35vh;
+    border-right: none;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+  .detail-panel {
+    overflow-y: visible;
+  }
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}

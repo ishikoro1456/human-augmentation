@@ -13,3 +13,15 @@ dependencies = [
   "python-dotenv",
   "rich",
 ]
+
+[project.optional-dependencies]
+analysis = [
+    "matplotlib>=3.10.8",
+    "pandas>=2.3.3",
+]
+eval = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]

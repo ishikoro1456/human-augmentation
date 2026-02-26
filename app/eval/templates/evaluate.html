@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}評価 {{ progress.current }}/{{ progress.total }} — 相槌評価{% endblock %}
+{% block body %}
+
+{# ── ヘッダー（固定） ────────────────────────────── #}
+<header class="eval-header">
+  <div class="eval-header-inner">
+    <a href="/sessions" class="back-link">← 一覧</a>
+    <div class="progress-area">
+      <span class="progress-label">{{ progress.current }} / {{ progress.total }}</span>
+      <progress value="{{ progress.evaluated }}" max="{{ progress.total }}" title="{{ progress.evaluated }}件評価済み"></progress>
+      <span class="progress-pct">{{ (progress.evaluated * 100 // progress.total) if progress.total else 0 }}%</span>
+    </div>
+    <span class="session-id">{{ session.experiment_id[:15] }}…</span>
+  </div>
+</header>
+
+{# ── 2カラムレイアウト ────────────────────────────── #}
+<div class="eval-layout">
+
+  {# ── 左: 会話タイムライン ── #}
+  <aside class="timeline-panel" id="timeline-panel">
+    <h3 class="panel-title">会話の流れ</h3>
+    {% for item in timeline %}
+      {% if item.kind == "stt" %}
+        <div class="segment">{{ item.stt.text }}</div>
+      {% else %}
+        {% set dec = item.decision %}
+        {% set is_active = (dec.index == decision.index) %}
+        {% set is_done = (dec.call_id in evaluated_ids) %}
+        <a href="/evaluate/{{ session.experiment_id }}/{{ dec.index }}"
+           class="agent-card {% if is_active %}active{% elif is_done %}done{% endif %}"
+           id="card-{{ dec.index }}"
+           hx-boost="false">
+          <span class="card-num">#{{ dec.index + 1 }}</span>
+          {% set g = gesture_labels.get(dec.gesture_hint, ('?', '?')) %}
+          <span class="card-gesture">{{ g[1] }} {{ g[0] }}</span>
+          <span class="card-result {% if dec.selected_id == 'NONE' %}none{% endif %}">
+            {{ dec.selected_text }}{% if dec.strength %} <small>({{ strength_labels[dec.strength] }})</small>{% endif %}
+          </span>
+          {% if is_done %}<span class="done-mark">✓</span>{% endif %}
+        </a>
+      {% endif %}
+    {% endfor %}
+  </aside>
+
+  {# ── 右: 判断詳細 + 評価フォーム ── #}
+  <section class="detail-panel">
+
+    {# 判断の詳細 #}
+    <div class="decision-detail">
+      <h3 class="panel-title">判断 #{{ decision.index + 1 }} の詳細</h3>
+
+      <div class="detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">検知ジェスチャー</span>
+          {% set g = gesture_labels.get(decision.gesture_hint, ('その他', '〜')) %}
+          <span class="detail-value gesture-{{ decision.gesture_hint }}">
+            {{ g[1] }} {{ g[0] }}
+            <small class="score">スコア {{ decision.nod_likelihood_score }}/6</small>
+          </span>
+        </div>
+
+        <div class="detail-item">
+          <span class="detail-label">選択された相槌</span>
+          <span class="detail-value {% if decision.selected_id == 'NONE' %}none-value{% endif %}">
+            {% if decision.selected_id == "NONE" %}
+              <strong>送信なし</strong>
+            {% else %}
+              <strong>「{{ decision.selected_text }}」</strong>
+              <small>強さ: {{ strength_labels[decision.strength] }} ({{ decision.strength }})</small>
+            {% endif %}
+          </span>
+        </div>
+
+        <div class="detail-item">
+          <span class="detail-label">エージェントの理由</span>
+          <span class="detail-value reason">{{ decision.reason or "—" }}</span>
+        </div>
+
+        <div class="detail-item">
+          <span class="detail-label">応答時間</span>
+          <span class="detail-value">{{ "{:,}".format(decision.latency_ms) }} ms</span>
+        </div>
+      </div>
+
+      {# 会話コンテキスト（折りたたみ） #}
+      {% if decision.transcript_context %}
+      <details class="context-details">
+        <summary>エージェントが参照した会話コンテキスト</summary>
+        <div class="context-box">
+          {% for line in decision.transcript_context.split('\n') %}
+            {% if line.strip() %}
+            <p class="context-line {% if line == decision.utterance %}highlight{% endif %}">{{ line }}</p>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+    </div>
+
+    {# 評価フォーム #}
+    <div class="eval-form-wrapper">
+      <h3 class="panel-title">あなたの評価</h3>
+      <form method="post" action="/evaluate/{{ session.experiment_id }}/{{ decision.index }}" id="eval-form">
+        <input type="hidden" name="evaluator_id" value="{{ evaluator_id }}">
+        <input type="hidden" name="time_spent_ms" id="time-spent" value="0">
+
+        {# Likert scale #}
+        <fieldset class="likert-fieldset">
+          <legend>この相槌の選択は適切でしたか？<small>（必須）</small></legend>
+          <div class="likert-row">
+            <span class="likert-anchor">全く<br>不適切</span>
+            <div class="likert-options">
+              {% for v in [1,2,3,4,5,6,7] %}
+              <label class="likert-label">
+                <input type="radio" name="appropriateness" value="{{ v }}"
+                  {% if existing_eval and existing_eval.appropriateness == v %}checked{% endif %}
+                  required>
+                <span class="likert-num">{{ v }}</span>
+              </label>
+              {% endfor %}
+            </div>
+            <span class="likert-anchor">とても<br>適切</span>
+          </div>
+        </fieldset>
+
+        {# Issue checkboxes #}
+        <fieldset class="issues-fieldset">
+          <legend>問題点 <small>（任意・複数可）</small></legend>
+          <div class="issues-grid">
+            {% for value, label in issue_options %}
+            <label class="issue-label">
+              <input type="checkbox" name="issues" value="{{ value }}"
+                {% if existing_eval and value in existing_eval.issues %}checked{% endif %}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        {# Alternative selection #}
+        <fieldset class="alt-fieldset">
+          <legend>あなたならどれを選びますか？ <small>（任意）</small></legend>
+          <div class="alt-grid">
+            <label class="alt-label">
+              <input type="radio" name="would_have_sent" value=""
+                {% if not existing_eval or not existing_eval.would_have_sent %}checked{% endif %}>
+              <span class="alt-text skip">選択しない</span>
+            </label>
+            <label class="alt-label">
+              <input type="radio" name="would_have_sent" value="NONE"
+                {% if existing_eval and existing_eval.would_have_sent == "NONE" %}checked{% endif %}>
+              <span class="alt-text none">送信なし</span>
+            </label>
+            {% for item in catalog %}
+            <label class="alt-label">
+              <input type="radio" name="would_have_sent" value="{{ item.id }}"
+                {% if existing_eval and existing_eval.would_have_sent == item.id %}checked{% endif %}>
+              <span class="alt-text {{ item.directory }}">
+                「{{ item.text }}」
+                <small>{{ 'positive' if item.directory == 'positive' else 'negative' }} s{{ item.strength }}</small>
+              </span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        {# Comment #}
+        <label for="comment">コメント <small>（任意）</small>
+          <textarea id="comment" name="comment" rows="2" placeholder="気になった点など自由に">{{ existing_eval.comment if existing_eval else "" }}</textarea>
+        </label>
+
+        {# Navigation #}
+        <div class="nav-buttons">
+          {% if prev_index is not none %}
+          <a href="/evaluate/{{ session.experiment_id }}/{{ prev_index }}" role="button" class="secondary nav-btn" id="prev-link">← 前へ</a>
+          {% else %}
+          <span></span>
+          {% endif %}
+          <button type="submit" id="submit-btn" class="nav-btn primary-btn">
+            {% if next_index is not none %}次へ →{% else %}完了 ✓{% endif %}
+          </button>
+        </div>
+      </form>
+    </div>
+
+  </section>
+</div>
+
+<script>
+// Auto-scroll timeline to active card
+document.addEventListener('DOMContentLoaded', function () {
+  const active = document.querySelector('.agent-card.active');
+  if (active) {
+    active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  // Timer: track time spent on this decision
+  const startTime = Date.now();
+  const form = document.getElementById('eval-form');
+  if (form) {
+    form.addEventListener('submit', function () {
+      document.getElementById('time-spent').value = Date.now() - startTime;
+    });
+  }
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', function (e) {
+    const tag = document.activeElement.tagName.toLowerCase();
+    if (tag === 'textarea' || tag === 'input' && document.activeElement.type === 'text') return;
+
+    // 1-7: select Likert rating
+    if (e.key >= '1' && e.key <= '7') {
+      const radio = document.querySelector('input[name="appropriateness"][value="' + e.key + '"]');
+      if (radio) { radio.checked = true; radio.focus(); }
+    }
+    // Enter or ArrowRight: submit
+    if ((e.key === 'Enter' || e.key === 'ArrowRight') && !e.shiftKey) {
+      const rated = document.querySelector('input[name="appropriateness"]:checked');
+      if (rated) {
+        e.preventDefault();
+        document.getElementById('eval-form').requestSubmit();
+      }
+    }
+    // ArrowLeft: previous
+    if (e.key === 'ArrowLeft') {
+      const prev = document.getElementById('prev-link');
+      if (prev) { e.preventDefault(); prev.click(); }
+    }
+  });
+});
+</script>
+{% endblock %}
