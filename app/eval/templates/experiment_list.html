@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}実験台本一覧 — 相槌実験{% endblock %}
+{% block body %}
+<main class="container" style="max-width:700px; padding-top:2rem;">
+  <h1>リアルタイム実験モード</h1>
+  <p class="muted">台本をTTSで読み上げながら、相槌エージェントをリアルタイムで評価します。</p>
+
+  {% if not evaluator_id %}
+  <p><em>参加者IDが設定されていません。<a href="/sessions">こちら</a>から設定してください。</em></p>
+  {% endif %}
+
+  {% for script in scripts %}
+  <article style="margin-bottom:1.5rem;">
+    <header><strong>{{ script.title }}</strong></header>
+    <p style="margin:0.3rem 0 0.8rem; font-size:0.9rem; color:var(--pico-muted-color);">
+      {{ script.description }}
+    </p>
+    <p style="font-size:0.85rem;">{{ script.sentences | length }} 文</p>
+    <form method="post" action="/experiment/{{ script.id }}/create">
+      <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <input
+          type="text"
+          name="imu_port"
+          placeholder="IMUポート（例: /dev/cu.usbserial-310）"
+          style="flex:1; min-width:220px; margin:0; font-size:0.85rem;"
+        >
+        <button type="submit" style="margin:0;">セッション開始</button>
+      </div>
+      <small style="color:var(--pico-muted-color);">IMUポートを空欄にするとモックモード（クリックでジェスチャー入力）になります</small>
+    </form>
+  </article>
+  {% endfor %}
+
+  <hr>
+  <p><a href="/sessions">← 事後評価モードに戻る</a></p>
+</main>
+{% endblock %}

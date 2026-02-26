@@ -1,0 +1,51 @@
+{# リアルタイム判断パネル（htmxポーリングターゲット） #}
+<div id="rt-panel"
+     hx-get="/experiment/run/{{ snap.session_id }}/poll"
+     hx-trigger="every 500ms"
+     hx-swap="outerHTML">
+
+  <div class="rt-section">
+    <h3 class="panel-title">エージェントの判断 <small class="muted">({{ snap.decisions | length }}件)</small></h3>
+
+    {% if snap.decisions %}
+    <div class="rt-decisions">
+      {% for d in snap.decisions | reverse %}
+      {% if loop.index <= 8 %}
+      <div class="rt-card {% if loop.first %}rt-card-latest{% endif %}">
+        <div class="rt-card-header">
+          <span class="rt-sentence">「{{ d.sentence_text[:20] }}{% if d.sentence_text | length > 20 %}…{% endif %}」</span>
+          <span class="rt-latency">{{ d.latency_ms }}ms</span>
+        </div>
+        <div class="rt-card-body">
+          <span class="rt-gesture gesture-{{ d.gesture_hint }}">
+            {{ gesture_labels.get(d.gesture_hint, ('?','?'))[1] }}
+            {{ gesture_labels.get(d.gesture_hint, ('?','?'))[0] }}
+          </span>
+          <span class="rt-arrow">→</span>
+          <span class="rt-result {% if d.selected_id == 'NONE' %}rt-none{% endif %}">
+            {% if d.selected_id == "NONE" %}
+              送信なし
+            {% else %}
+              「{{ d.selected_text }}」
+              {% if d.strength %}<small>({{ strength_labels[d.strength] }})</small>{% endif %}
+            {% endif %}
+          </span>
+        </div>
+        {% if d.reason %}
+        <div class="rt-reason">{{ d.reason }}</div>
+        {% endif %}
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="rt-empty">ジェスチャーが検知されると、ここに判断が表示されます。</p>
+    {% endif %}
+  </div>
+
+  {% if snap.state == "done" %}
+  <div class="done-banner">
+    ✓ セッション終了 — <a href="/experiment">台本一覧に戻る</a>
+  </div>
+  {% endif %}
+</div>

@@ -445,6 +445,143 @@ kbd {
   margin-bottom: 1.5rem;
 }
 
+/* ── Experiment mode ─────────────────────── */
+
+/* Script panel lines */
+.script-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  margin-bottom: 0.2rem;
+  font-size: 0.88rem;
+  color: var(--pico-muted-color);
+  transition: background 0.2s;
+}
+.script-line.script-done {
+  color: var(--pico-muted-color);
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+.script-line.script-current {
+  background: var(--color-active-bg);
+  border-left: 3px solid var(--color-active-border);
+  color: var(--pico-color);
+  font-weight: 600;
+  padding-left: 0.7rem;
+}
+.sl-num {
+  min-width: 1.5rem;
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+  text-align: right;
+}
+.sl-text { flex: 1; line-height: 1.5; }
+.done-msg {
+  color: var(--color-done-border);
+  font-weight: 600;
+  margin-top: 0.8rem;
+  text-align: center;
+}
+
+/* Experiment controls */
+.exp-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 1rem;
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 8px;
+}
+.advance-btn {
+  width: 100%;
+  font-size: 1.1rem;
+  padding: 0.8rem;
+}
+.gesture-btns {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.gesture-hint-label {
+  font-size: 0.82rem;
+  color: var(--pico-muted-color);
+  white-space: nowrap;
+}
+.gesture-btn {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  border-radius: 6px;
+  border: 2px solid;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: white;
+  transition: background 0.15s, transform 0.1s;
+}
+.gesture-btn:active { transform: scale(0.96); }
+.gesture-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.nod-btn { border-color: var(--color-nod); color: var(--color-nod); }
+.nod-btn:hover:not(:disabled) { background: var(--color-nod); color: white; }
+.shake-btn { border-color: var(--color-shake); color: var(--color-shake); }
+.shake-btn:hover:not(:disabled) { background: var(--color-shake); color: white; }
+
+/* RT decisions */
+.rt-section {
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+}
+.rt-decisions { display: flex; flex-direction: column; gap: 0.5rem; }
+.rt-card {
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  background: var(--pico-background-color);
+  opacity: 0.75;
+}
+.rt-card-latest {
+  border-color: var(--pico-primary);
+  opacity: 1;
+  background: var(--pico-card-sectioning-background-color);
+}
+.rt-card-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
+.rt-sentence { font-size: 0.78rem; color: var(--pico-muted-color); font-style: italic; }
+.rt-latency { font-size: 0.75rem; color: var(--pico-muted-color); }
+.rt-card-body { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+.rt-gesture { font-weight: 600; }
+.rt-gesture.gesture-nod { color: var(--color-nod); }
+.rt-gesture.gesture-shake { color: var(--color-shake); }
+.rt-arrow { color: var(--pico-muted-color); }
+.rt-result { font-weight: 600; }
+.rt-none { color: var(--color-none); font-weight: normal; }
+.rt-reason { font-size: 0.78rem; color: var(--pico-muted-color); font-style: italic; margin-top: 0.2rem; }
+.rt-empty {
+  color: var(--pico-muted-color);
+  font-size: 0.88rem;
+  font-style: italic;
+  text-align: center;
+  padding: 1rem;
+}
+.done-banner {
+  margin-top: 1rem;
+  padding: 0.8rem;
+  background: var(--color-done-bg);
+  border: 1px solid var(--color-done-border);
+  border-radius: 6px;
+  color: var(--color-done-border);
+  text-align: center;
+  font-weight: 600;
+}
+
 /* ── Responsive ──────────────────────── */
 @media (max-width: 900px) {
   .eval-layout {
