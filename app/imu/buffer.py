@@ -18,6 +18,7 @@ class ImuSample:
     gx: float
     gy: float
     gz: float
+    has_acc: bool = True
 
     def to_dict(self) -> Dict[str, float]:
         return {
@@ -176,6 +177,9 @@ class ImuBuffer:
             raw_dicts.append(
                 {
                     "t_rel_s": round(s.ts - now_ts, 3),
+                    "ax": round(s.ax, 3),
+                    "ay": round(s.ay, 3),
+                    "az": round(s.az, 3),
                     "gx": round(s.gx, 3),
                     "gy": round(s.gy, 3),
                     "gz": round(s.gz, 3),
@@ -209,6 +213,9 @@ class ImuBuffer:
             "gyro_delta": _delta_summary(raw_ds),
             "activity_1s": {k: round(v, 3) for k, v in activity_1s.items()},
             "stats": stats,
+            "sensor_flags": {
+                "acc_available": bool(latest.has_acc) if latest is not None else True,
+            },
         }
         if latest:
             out["latest"] = {

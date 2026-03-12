@@ -1,144 +1,67 @@
 # Human Augmentation
 
-リアルタイムで相槌を返す実験をするための試作です。
+英語の相槌音声を返すデモ用の最小 README です。
 
-今回の実験では `app/cli/listener.py` と `app/cli/talker.py` を使います。`app/cli/run.py` は使いません。
+## 英語音声の用意方法
 
-まずは 1台の macOS で listener と talker を同時に動かすのが一番楽です（ターミナルを2つ使います）。動いたら、2台に分けます。
+標準の英語音声は、すでに次に入っています。
 
-## 前提
+- `data/demo/catalog_en.tsv`
+- `data/demo/backchannel_en/positive/`
+- `data/demo/backchannel_en/negative/`
 
-この実験に必要なものを、短くまとめます。
+ふだんのセンサ単体モードでは、これだけあれば足ります。台本付きデモを使うときだけ、次も使います。
 
-- 1台（または2台）の端末
-- `uv sync` が通る
-- `OPENAI_API_KEY` を設定している（`.env` でも可。モデルを呼ぶのは listener 側です）
-- `ffmpeg` が実行できる（talker が使います）
-- 話し手の音声を listener 側で聞きたい場合は `ffplay` が実行できる（`ffmpeg` を入れると一緒に入ります）
-- `data/catalog.tsv` と `data/backchannel/` がある（相槌の候補と音声）
-- 今回（頷き/首振り）のカタログは `positive` / `negative` の2種類だけを使います（音声は `data/backchannel/positive/` と `data/backchannel/negative/`）
+- `data/demo/scripts/conference_demo_en.json`
+- `data/demo/script_audio/conference_demo_en/`
 
-## 何をどちらで起動するか
+音声を差し替えるときは、`catalog_en.tsv` の `id` と `directory` に合わせて mp3 を置きます。ファイル名は今の形式にそろえてください。たとえば `01_s1_n1_yes.mp3` のように置けば読み込まれます。
 
-listener は、IMU を読みつつ、話し手の音声を受け取って再生します。同時に、受け取った音声から文字起こしを作って文脈をため、相槌を決めて talker 側へ送ります。
+macOS で英語音声を作り直すなら、`say` と `ffmpeg` が使えます。例です。
 
-talker は、マイク音声をそのまま listener に送り、listener から届いた相槌を再生します。
-
-## 手順（今回の実験）
-
-### 0) 両方の端末で準備
-
-両方の端末で、最初に依存を入れます。
-
+```bash
+say -v Samantha -o /tmp/yes.aiff "Yes."
+ffmpeg -y -i /tmp/yes.aiff data/demo/backchannel_en/positive/01_s1_n1_yes.mp3
 ```
+
+## プログラムの起動方法
+
+最初に依存を入れます。
+
+```bash
 uv sync
 ```
 
-### 1) 聞き手側（IMU端末）を起動する
+いちばん簡単な起動はこれです。台本は読み込まず、`usbserial` 側のメガネを自動で探して、センサだけで判断して英語音声を返します。
 
-まず IMU の USB シリアル番号を確認します。次を実行して、`usbserial` や `usbmodem` などの名前を探してください。
-
-```
-ls /dev/cu.*
+```bash
+bash scripts/demo-up.sh
 ```
 
-候補が複数ある場合は、IMU を抜く前と刺した後で `ls /dev/cu.*` を繰り返し、差分が IMU です。必要なら `ls /dev/tty.*` も見てください。
+もう片方のメガネを使うときは、`device_id` を変えます。
 
-次に listener を起動します。
-
-1台の macOS で試す場合は、`--listen-host 127.0.0.1` が分かりやすいです。
-2台で試す場合は、`--listen-host 0.0.0.0` にします。
-
-```
-uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.jsonl --listen-host 127.0.0.1 --listen-port 8765 --port /dev/cu.usbserial-310 --baud 115200
+```bash
+bash scripts/demo-up.sh demo-xiao-bno055
 ```
 
-`--ui` は見やすさ重視の画面（participant）を出します。開発中に細かい情報も見たいときは、`--ui-mode debug` を付けます。
+ポートを固定したいときは、環境変数で渡せます。
 
-起動直後に IMU の計測が入ります。既定では「普段どおりの動き10秒」と「頷き/首振り2秒ずつ」で、軸の推定もします。不要なら `--no-gesture-calibration` を付けて止められます。
-
-起動直後に IMU の計測が入ります。急いで試すだけなら、次で静止/動作の計測を省略できます。
-
-```
-uv run python app/cli/listener.py --ui --trace-jsonl data/logs/trace_listener.jsonl --listen-host 0.0.0.0 --listen-port 8765 --port /dev/cu.usbserial-310 --baud 115200 --calibration-still-sec 0 --calibration-active-sec 0
+```bash
+DEMO_PORT=/dev/cu.usbserial-10 bash scripts/demo-up.sh
 ```
 
-相槌が出ない、または出すぎるなどのときは、上のコマンドの末尾に `--debug-agent --debug-signal` を足すと理由が見やすくなります。
+自動検出は `usbserial`、`wchusbserial`、`SLAB_USBtoUART`、`usbmodem` を見ます。外れたときは `DEMO_PORT` か `--port` を使ってください。
 
-相槌の比較モードを変える場合は `--mode` を使います。
+`demo-up.sh` を使わずに直接起動するなら次です。
 
-- `--mode llm`（既定）: IMU とモデルで相槌を決めます
-- `--mode human`: 端末に表示される一覧を見て、番号（または id）を入力して Enter で確定します
-- `--mode none`: 相槌を返しません
-
-### 2) 話し手側（マイク端末）を起動する
-
-1台の macOS で試す場合は、talker の接続先は `127.0.0.1` です。
-
-2台で試す場合は、まず listener 側の IP を調べます。listener 側（macOS）の端末で次を実行し、出てきた IP を控えてください（Wi-Fi の場合）。
-
-```
-ipconfig getifaddr en0
+```bash
+uv run python app/cli/demo.py
 ```
 
-空なら `en1` を試してください。
+台本付きデモに戻したいときだけ、`--script` を付けます。
 
-ここで出た IP は「listener 側の IP」です。talker の `--connect-host` には、この IP を入れてください。
-
-次に、話し手側でマイクの番号を確認します。
-
-macOS の場合は次です。
-
-```
-uv run python app/cli/talker.py --list-devices
+```bash
+uv run python app/cli/demo.py --script data/demo/scripts/conference_demo_en.json
 ```
 
-この表示のうち、`AVFoundation audio devices` の番号が音声の入力です。内蔵マイクを使いたい場合は、そこに出ている `MacBook Proのマイク` などの番号を使います。
-
-起動するときの `--mic-device` は `:<音声番号>` です。たとえば音声番号が 2 なら `:2` です。
-
-macOS の例です。
-
-```
-uv run python app/cli/talker.py --connect-host 127.0.0.1 --connect-port 8765 --mic-device :2 --trace-jsonl data/logs/trace_talker.jsonl
-```
-
-2台で試す場合は、`127.0.0.1` の代わりに listener 側の IP を入れてください。
-
-talker は、接続できるまで待ってからマイク取り込みを始めます。先に listener を起動してください。
-
-### 3) うまく動いているかの目安
-
-聞き手側は、話し手の声が聞こえ、ダッシュボード（`--ui`）に直近の文字起こしと、判断が出ます。話し手側は、聞き手が選んだ相槌が再生されます。必要なら talker に `--debug-net` を付けると、受け取った相槌の id が表示されます。
-
-### 4) 比較の回し方（none / human / llm）
-
-このリポジトリでは、listener の `--mode` を変えて比較します。どのモードでも、talker は同じコマンドで動かせます。
-
-- `--mode none` は、相槌を返さないので「聞き手がいない」に近い状態になります
-- `--mode human` は、一覧からキー入力で相槌を返します（生声ではなくカタログです）
-- `--mode llm` は、IMU とモデルで相槌を決めます（既定）
-
-### 5) ログを残す
-
-listener の `--trace-jsonl` には、IMU、渡した文脈、モデルの理由、送った相槌などが残ります。talker の `--trace-jsonl` には、受け取った相槌と再生結果が残ります。
-
-2つのログは、同じ `experiment_id` が入るので、あとで突合できます。これは listener が自動で作って talker に知らせます（必要なら listener に `--experiment-id` を付けて固定できます）。
-
-聞き手側は `data/stt_segments_listener/` に、文字起こしに使った区切り音声（wav）が残ります。
-
-相槌の一覧だけを見たいときは、次で TSV に要約できます（ログを同じ場所に置いてから実行してください）。
-
-```
-uv run python scripts/trace_to_tsv.py data/logs/trace_listener.jsonl data/logs/trace_talker.jsonl --out data/logs/backchannel_summary.tsv
-```
-
-### 6) 壊したときに戻す
-
-試作なので、途中で壊したときは git で戻せます。最後に動いた状態は `feat/experiment-compare` に残しています。
-
-```
-git switch feat/experiment-compare
-```
-
-止めるときは、どちらも `Ctrl+C` です。
+センサ単体モードでは `OPENAI_API_KEY` は要りません。終了は `Ctrl+C` です。

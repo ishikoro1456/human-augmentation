@@ -1,0 +1,85 @@
+{
+  "id": "conference_demo_en",
+  "title": "Conference Demo Script (English)",
+  "language": "en",
+  "audio_dir": "../script_audio/conference_demo_en",
+  "segments": [
+    {
+      "kind": "speech",
+      "text": "This study proposes a system that supports audio-only remote communication by conveying the listener's reactions to the speaker through backchannel audio.",
+      "audio": "001_intro.mp3"
+    },
+    {
+      "kind": "cue",
+      "text": "デバイスを見せる"
+    },
+    {
+      "kind": "speech",
+      "text": "This is the eyeglass-shaped device we developed for the system.",
+      "audio": "002_device.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "It has an IMU sensor on the left side of the frame, which detects the listener's head gestures, such as nodding or shaking.",
+      "audio": "003_imu.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "When a gesture is detected, the system sends a reaction signal to the speaker's side by playing an appropriate pre-recorded backchannel audio.",
+      "audio": "004_reaction_signal.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "The selection of the backchannel audio is handled by an AI agent.",
+      "audio": "005_ai_agent.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "It considers the type of head gesture, its strength, and the conversational context.",
+      "audio": "006_selection_logic.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "You can experience how the system works by acting as a listener.",
+      "audio": "007_listener_role.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "Would you like to try it?",
+      "audio": "008_try_it.mp3"
+    },
+    {
+      "kind": "cue",
+      "text": "デバイスを装着してもらう"
+    },
+    {
+      "kind": "speech",
+      "text": "First, please wear this device.",
+      "audio": "009_wear_device.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "Then you will hear an audio clip, which you can think of as the speaker's voice.",
+      "audio": "010_audio_clip.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "While listening, please nod or shake your head freely to react to the speaker.",
+      "audio": "011_react_freely.mp3"
+    },
+    {
+      "kind": "cue",
+      "text": "体験後"
+    },
+    {
+      "kind": "speech",
+      "text": "In a real communication setting, the backchannel audio you just heard would be played to the speaker.",
+      "audio": "012_real_setting.mp3"
+    },
+    {
+      "kind": "speech",
+      "text": "In this way, the system can convey the listener's nonverbal cues to the speaker and improve the quality of audio-only remote communication.",
+      "audio": "013_conclusion.mp3"
+    }
+  ]
+}

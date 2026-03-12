@@ -28,6 +28,7 @@ class SignalEpisode:
     gesture_hint: str
     nod_likelihood_score: int
     gyro_mag_max: float
+    signal_confidence: float = 0.0
     signal_at_peak: Dict[str, object] = field(default_factory=dict)
 
     def duration_s(self) -> float:
@@ -45,6 +46,7 @@ class SignalEpisode:
             "gesture_hint": self.gesture_hint,
             "nod_likelihood_score": self.nod_likelihood_score,
             "gyro_mag_max": round(self.gyro_mag_max, 3),
+            "signal_confidence": round(self.signal_confidence, 3),
         }
 
 
@@ -181,6 +183,7 @@ class HumanSignalStore:
             gesture_hint=str(signal.get("gesture_hint", "other")),
             nod_likelihood_score=int(motion_features.get("nod_likelihood_score", 0) or 0),
             gyro_mag_max=self._current_episode_max_mag,
+            signal_confidence=float(signal.get("signal_confidence_0to1", 0.0) or 0.0),
             signal_at_peak=dict(signal),
         )
         self._episodes.append(episode)
@@ -243,6 +246,7 @@ class HumanSignalStore:
                     gesture_hint=str(signal.get("gesture_hint", "other")),
                     nod_likelihood_score=int(motion_features.get("nod_likelihood_score", 0) or 0),
                     gyro_mag_max=self._current_episode_max_mag,
+                    signal_confidence=float(signal.get("signal_confidence_0to1", 0.0) or 0.0),
                     signal_at_peak=dict(signal),
                 )
                 episodes.append(current_ep)
@@ -299,6 +303,7 @@ class HumanSignalStore:
                     gesture_hint=str(signal.get("gesture_hint", "other")),
                     nod_likelihood_score=int(motion_features.get("nod_likelihood_score", 0) or 0),
                     gyro_mag_max=self._current_episode_max_mag,
+                    signal_confidence=float(signal.get("signal_confidence_0to1", 0.0) or 0.0),
                     signal_at_peak=dict(signal),
                 )
                 # 条件チェック

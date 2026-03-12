@@ -1,0 +1,14 @@
+id	directory	strength	nod	text
+01	positive	1	1	Yes.
+02	positive	1	1	Uh-huh.
+03	positive	3	3	I see.
+04	positive	3	3	Right.
+05	positive	3	3	Exactly.
+06	positive	5	5	I understand.
+07	positive	5	5	That's true.
+08	negative	1	1	Hmm?
+09	negative	1	1	Really?
+10	negative	3	3	I wonder.
+11	negative	3	3	Maybe not.
+12	negative	5	5	Not exactly.
+13	negative	5	5	I'm not sure.

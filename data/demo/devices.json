@@ -1,0 +1,52 @@
+{
+  "profiles": [
+    {
+      "device_id": "demo-usbserial-six-axis",
+      "input_kind": "six_axis",
+      "baud": 115200,
+      "nod_axis": "gz",
+      "shake_axis": "gx",
+      "port_globs": [
+        "/dev/cu.usbserial*",
+        "/dev/cu.wchusbserial*",
+        "/dev/cu.SLAB_USBtoUART*"
+      ]
+    },
+    {
+      "device_id": "demo-xiao-bno055",
+      "input_kind": "six_axis",
+      "baud": 115200,
+      "port_globs": [
+        "/dev/cu.usbmodem*"
+      ]
+    },
+    {
+      "device_id": "demo-six-axis",
+      "input_kind": "six_axis",
+      "baud": 115200,
+      "port_globs": [
+        "/dev/cu.usbserial-*",
+        "/dev/cu.usbmodem*"
+      ]
+    },
+    {
+      "device_id": "demo-gyro-xyz",
+      "input_kind": "gyro_xyz",
+      "baud": 115200,
+      "port_globs": [
+        "/dev/cu.usbserial-*",
+        "/dev/cu.usbmodem*"
+      ],
+      "axis_map": {
+        "gx": "x",
+        "gy": "y",
+        "gz": "z"
+      },
+      "sign_flip": {
+        "gx": 1,
+        "gy": 1,
+        "gz": 1
+      }
+    }
+  ]
+}
