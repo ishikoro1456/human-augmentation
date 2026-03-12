@@ -30,6 +30,7 @@ dist/
 data/tts_cache/
 data/stt_segments_listener/
 data/logs/
+data/results/
 
 # UV
 .uv/
@@ -39,3 +40,6 @@ AGENTS.md
 
 # Env
 .env
+inst
+.claude/skills/
+.skills/
