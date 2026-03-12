@@ -112,6 +112,49 @@ class TraceLoader:
                         reason=result.get("reason", ""),
                         latency_ms=result.get("latency_ms", 0),
                         ts=call["ts"],
+                        stage_index=int(call.get("stage_index", -1) or -1),
+                        stage_name=str(call.get("stage_name", "") or ""),
+                        intensity_1to5=int(result.get("intensity_1to5", 0) or 0),
+                        generated_text=str(result.get("generated_text", "") or ""),
+                        generation_mode=str(result.get("generation_mode", "") or ""),
+                        signal_confidence=float(result.get("signal_confidence", 0.0) or 0.0),
+                        imu_features=call.get("imu_features", {}) if isinstance(call.get("imu_features"), dict) else {},
+                    )
+                )
+
+            # 4段階実験ログ（stage_decision）にも対応
+            for e in events:
+                if e.get("type") != "stage_decision":
+                    continue
+                call_id = str(e.get("call_id", "") or "")
+                if not call_id:
+                    continue
+                decisions.append(
+                    AgentDecision(
+                        call_id=call_id,
+                        experiment_id=exp_id,
+                        index=0,
+                        utterance=str(e.get("sentence_text", "") or ""),
+                        transcript_context="",
+                        gesture_hint=str(e.get("gesture_hint", "other") or "other"),
+                        nod_likelihood_score=0,
+                        directory_allowlist=[],
+                        is_boundary=True,
+                        speaker_speaking=False,
+                        speaker_silence_ms=0,
+                        selected_id=str(e.get("selected_id", "") or ""),
+                        selected_text=str(e.get("selected_text", "") or ""),
+                        strength=0,
+                        reason=str(e.get("reason", "") or ""),
+                        latency_ms=int(e.get("latency_ms", 0) or 0),
+                        ts=float(e.get("ts", 0.0) or 0.0),
+                        stage_index=int(e.get("stage_index", -1) or -1),
+                        stage_name=str(e.get("stage_name", "") or ""),
+                        intensity_1to5=int(e.get("intensity_1to5", 0) or 0),
+                        generated_text=str(e.get("selected_text", "") or ""),
+                        generation_mode=str(e.get("generation_mode", "") or ""),
+                        signal_confidence=float(e.get("signal_confidence", 0.0) or 0.0),
+                        imu_features=e.get("imu_features", {}) if isinstance(e.get("imu_features"), dict) else {},
                     )
                 )
 

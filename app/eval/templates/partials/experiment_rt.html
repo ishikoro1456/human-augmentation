@@ -1,51 +1,46 @@
-{# リアルタイム判断パネル（htmxポーリングターゲット） #}
 <div id="rt-panel"
+     data-next-url="{{ next_url|default('') }}"
      hx-get="/experiment/run/{{ snap.session_id }}/poll"
      hx-trigger="every 500ms"
      hx-swap="outerHTML">
 
   <div class="rt-section">
-    <h3 class="panel-title">エージェントの判断 <small class="muted">({{ snap.decisions | length }}件)</small></h3>
+    <h3 class="panel-title">応答履歴 <small class="muted">({{ snap.decisions | length }}件)</small></h3>
 
     {% if snap.decisions %}
     <div class="rt-decisions">
       {% for d in snap.decisions | reverse %}
-      {% if loop.index <= 8 %}
+      {% if loop.index <= 10 %}
       <div class="rt-card {% if loop.first %}rt-card-latest{% endif %}">
         <div class="rt-card-header">
-          <span class="rt-sentence">「{{ d.sentence_text[:20] }}{% if d.sentence_text | length > 20 %}…{% endif %}」</span>
+          <span class="rt-sentence">「{{ d.sentence_text[:22] }}{% if d.sentence_text | length > 22 %}…{% endif %}」</span>
           <span class="rt-latency">{{ d.latency_ms }}ms</span>
         </div>
         <div class="rt-card-body">
           <span class="rt-gesture gesture-{{ d.gesture_hint }}">
-            {{ gesture_labels.get(d.gesture_hint, ('?','?'))[1] }}
-            {{ gesture_labels.get(d.gesture_hint, ('?','?'))[0] }}
+            {{ gesture_labels.get(d.gesture_hint, ('?','?'))[1] }} {{ gesture_labels.get(d.gesture_hint, ('?','?'))[0] }}
           </span>
           <span class="rt-arrow">→</span>
-          <span class="rt-result {% if d.selected_id == 'NONE' %}rt-none{% endif %}">
-            {% if d.selected_id == "NONE" %}
-              送信なし
-            {% else %}
-              「{{ d.selected_text }}」
-              {% if d.strength %}<small>({{ strength_labels[d.strength] }})</small>{% endif %}
-            {% endif %}
+          <span class="rt-result">
+            「{{ d.selected_text }}」
+            <small>強度 {{ d.intensity_1to5 }}/5</small>
           </span>
         </div>
-        {% if d.reason %}
-        <div class="rt-reason">{{ d.reason }}</div>
-        {% endif %}
+        <div class="rt-reason">
+          mode={{ d.generation_mode }} / conf={{ '%.2f'|format(d.signal_confidence) }} / constraints={{ 'ok' if d.constraints_ok else 'retry' }}
+        </div>
       </div>
       {% endif %}
       {% endfor %}
     </div>
     {% else %}
-    <p class="rt-empty">ジェスチャーが検知されると、ここに判断が表示されます。</p>
+    <p class="rt-empty">ジェスチャーが検知されると、ここに応答が表示されます。</p>
     {% endif %}
   </div>
 
-  {% if snap.state == "done" %}
+  {% if next_url %}
   <div class="done-banner">
-    ✓ セッション終了 — <a href="/experiment">台本一覧に戻る</a>
+    段階が完了しました。評価画面へ移動します...
   </div>
   {% endif %}
 </div>

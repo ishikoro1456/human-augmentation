@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -28,6 +28,13 @@ class AgentDecision:
     reason: str
     latency_ms: int
     ts: float
+    stage_index: int = -1
+    stage_name: str = ""
+    intensity_1to5: int = 0
+    generated_text: str = ""
+    generation_mode: str = ""
+    signal_confidence: float = 0.0
+    imu_features: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -67,5 +74,34 @@ class Evaluation:
     issues: list = field(default_factory=list)
     comment: str = ""
     time_spent_ms: int = 0
+    created_at: str = ""
+    id: Optional[int] = None
+
+
+@dataclass
+class StageEvaluation:
+    session_id: str
+    stage_index: int
+    evaluator_id: str
+    common_q1: int
+    common_q2: int
+    common_q3: int
+    common_q4: int
+    specific_q1: int
+    specific_q2: int
+    specific_q3: int
+    overall_comment: str = ""
+    created_at: str = ""
+    id: Optional[int] = None
+
+
+@dataclass
+class ResponseAnnotation:
+    session_id: str
+    stage_index: int
+    call_id: str
+    evaluator_id: str
+    issue_tags: list[str] = field(default_factory=list)
+    comment: str = ""
     created_at: str = ""
     id: Optional[int] = None

@@ -601,3 +601,32 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Stage review pages ───────────────── */
+.stage-pill {
+  display: inline-block;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--pico-muted-color);
+}
+
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.stage-grid .stage-item {
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 8px;
+  padding: 0.5rem;
+  font-size: 0.84rem;
+  background: var(--pico-card-background-color);
+}
+
+.stage-grid .stage-item.active {
+  border-color: var(--pico-primary);
+  background: var(--pico-card-sectioning-background-color);
+}

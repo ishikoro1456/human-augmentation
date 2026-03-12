@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}4段階実験 完了{% endblock %}
+{% block body %}
+<main class="container" style="max-width:960px; padding-top:2rem;">
+  <h1>4段階実験が完了しました</h1>
+  <p class="muted">セッション: {{ session_id }}</p>
+
+  <article>
+    <header><strong>段階ごとの記録</strong></header>
+    <figure>
+      <table>
+        <thead>
+          <tr>
+            <th>段階</th>
+            <th>応答数</th>
+            <th>共通平均</th>
+            <th>固有平均</th>
+            <th>指摘数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for st in stages %}
+          {% set run = snap.stage_runs[st.index] %}
+          {% set ev = stage_eval_map.get(st.index) %}
+          <tr>
+            <td>{{ st.name }}</td>
+            <td>{{ run.decision_count }}</td>
+            <td>
+              {% if ev %}
+                {{ '%.2f'|format((ev.common_q1 + ev.common_q2 + ev.common_q3 + ev.common_q4) / 4.0) }}
+              {% else %}-{% endif %}
+            </td>
+            <td>
+              {% if ev %}
+                {{ '%.2f'|format((ev.specific_q1 + ev.specific_q2 + ev.specific_q3) / 3.0) }}
+              {% else %}-{% endif %}
+            </td>
+            <td>{{ annotation_counts.get(st.index, 0) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </figure>
+  </article>
+
+  <article>
+    <header><strong>共通指標</strong></header>
+    <ul>
+      {% for _, label in common_labels.items() %}
+      <li>{{ label }}</li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <div style="display:flex; gap:0.8rem; flex-wrap:wrap;">
+    <a href="/experiment" role="button" class="secondary">台本一覧へ戻る</a>
+    <a href="/sessions" role="button" class="secondary">セッション一覧へ</a>
+    <a href="/export/json" role="button">JSONを出力</a>
+    <a href="/export/stage-csv" role="button" class="secondary">段階CSV</a>
+    <a href="/export/annotations-csv" role="button" class="secondary">指摘CSV</a>
+  </div>
+</main>
+{% endblock %}
