@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-03-13T06:33:32.396875+00:00",
+  "config": {
+    "script_path": "data/demo/scripts/conference_demo_en.json",
+    "catalog_path": "data/demo/catalog_en.tsv",
+    "audio_dir": "data/demo/backchannel_en",
+    "script_model": "gpt-4o-mini-tts",
+    "script_voice": "marin",
+    "script_instructions": "Speak clear English for a conference demo. Use a calm, natural pace and a professional but friendly tone.",
+    "backchannel_model": "gpt-4o-mini-tts",
+    "backchannel_voice": "cedar",
+    "backchannel_instructions": "Speak as a short, natural English backchannel. Keep it brief, conversational, and easy to hear in a live demo.",
+    "format": "mp3",
+    "overwrite": true
+  },
+  "files": [
+    {
+      "kind": "script",
+      "text": "This study proposes a system that supports audio-only remote communication by conveying the listener's reactions to the speaker through backchannel audio.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/001_intro.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "This is the eyeglass-shaped device we developed for the system.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/002_device.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "It has an IMU sensor on the left side of the frame, which detects the listener's head gestures, such as nodding or shaking.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/003_imu.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "When a gesture is detected, the system sends a reaction signal to the speaker's side by playing an appropriate pre-recorded backchannel audio.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/004_reaction_signal.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "The selection of the backchannel audio is handled by an AI agent.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/005_ai_agent.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "It considers the type of head gesture, its strength, and the conversational context.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/006_selection_logic.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "You can experience how the system works by acting as a listener.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/007_listener_role.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "Would you like to try it?",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/008_try_it.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "First, please wear this device.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/009_wear_device.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "Then you will hear an audio clip, which you can think of as the speaker's voice.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/010_audio_clip.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "While listening, please nod or shake your head freely to react to the speaker.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/011_react_freely.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "In a real communication setting, the backchannel audio you just heard would be played to the speaker.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/012_real_setting.mp3"
+    },
+    {
+      "kind": "script",
+      "text": "In this way, the system can convey the listener's nonverbal cues to the speaker and improve the quality of audio-only remote communication.",
+      "path": "/Users/ishi/workspace/human-augmentation/data/demo/script_audio/conference_demo_en/013_conclusion.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Yes.",
+      "path": "data/demo/backchannel_en/positive/01_s1_n1_yes.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Uh-huh.",
+      "path": "data/demo/backchannel_en/positive/02_s1_n1_uh_huh.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "I see.",
+      "path": "data/demo/backchannel_en/positive/03_s3_n3_i_see.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Right.",
+      "path": "data/demo/backchannel_en/positive/04_s3_n3_right.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Exactly.",
+      "path": "data/demo/backchannel_en/positive/05_s3_n3_exactly.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "I understand.",
+      "path": "data/demo/backchannel_en/positive/06_s5_n5_i_understand.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "That's true.",
+      "path": "data/demo/backchannel_en/positive/07_s5_n5_thats_true.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Hmm?",
+      "path": "data/demo/backchannel_en/negative/08_s1_n1_hmm.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Really?",
+      "path": "data/demo/backchannel_en/negative/09_s1_n1_really.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "I wonder.",
+      "path": "data/demo/backchannel_en/negative/10_s3_n3_i_wonder.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Maybe not.",
+      "path": "data/demo/backchannel_en/negative/11_s3_n3_maybe_not.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "Not exactly.",
+      "path": "data/demo/backchannel_en/negative/12_s5_n5_not_exactly.mp3"
+    },
+    {
+      "kind": "backchannel",
+      "text": "I'm not sure.",
+      "path": "data/demo/backchannel_en/negative/13_s5_n5_im_not_sure.mp3"
+    }
+  ]
+}
