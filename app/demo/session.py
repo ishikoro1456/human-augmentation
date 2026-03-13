@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -203,6 +204,131 @@ class SensorOnlySpeaker:
         return "Sensor-only mode. Use only the listener gesture."
 
 
+class MeasurementControl:
+    def __init__(self, *, enabled: bool) -> None:
+        self._lock = threading.Lock()
+        self._enabled = bool(enabled)
+
+    def is_enabled(self) -> bool:
+        with self._lock:
+            return self._enabled
+
+    def set_enabled(self, enabled: bool) -> bool:
+        value = bool(enabled)
+        with self._lock:
+            self._enabled = value
+        return value
+
+    def toggle(self) -> bool:
+        with self._lock:
+            self._enabled = not self._enabled
+            return self._enabled
+
+
+def _paused_signal() -> Dict[str, object]:
+    return {
+        "present": False,
+        "gesture_hint": "other",
+        "reason": "paused",
+    }
+
+
+def _drain_signal_events(signal_events: queue.Queue) -> None:
+    while True:
+        try:
+            signal_events.get_nowait()
+        except queue.Empty:
+            return
+
+
+def _set_measurement_enabled(
+    control: MeasurementControl,
+    *,
+    enabled: bool,
+    player: AudioPlayer,
+    signal_events: queue.Queue,
+    emit: Callable[[str], None],
+    trace: TraceWriter | None,
+) -> bool:
+    current = control.is_enabled()
+    if current == bool(enabled):
+        return current
+    next_state = control.set_enabled(enabled)
+    player.stop()
+    _drain_signal_events(signal_events)
+    if trace:
+        trace.write({"type": "demo_measurement_toggle", "enabled": bool(next_state)})
+    if next_state:
+        emit("測定を ON にしました。頷くか首を振ると英語で返します。")
+    else:
+        emit("測定を OFF にしました。メガネを外せます。")
+    return next_state
+
+
+def _sensor_only_control_loop(
+    *,
+    control: MeasurementControl,
+    speaker: SensorOnlySpeaker,
+    player: AudioPlayer,
+    signal_events: queue.Queue,
+    emit: Callable[[str], None],
+    trace: TraceWriter | None,
+) -> None:
+    while not speaker.is_done():
+        try:
+            line = input().strip().lower()
+        except EOFError:
+            _set_measurement_enabled(
+                control,
+                enabled=True,
+                player=player,
+                signal_events=signal_events,
+                emit=emit,
+                trace=trace,
+            )
+            emit("標準入力が読めないので、測定を ON のまま続けます。")
+            return
+        except KeyboardInterrupt:
+            speaker.stop()
+            player.stop()
+            return
+
+        if line in ("q", "quit", "exit"):
+            speaker.stop()
+            player.stop()
+            emit("停止します。")
+            return
+        if line in ("on", "start"):
+            _set_measurement_enabled(
+                control,
+                enabled=True,
+                player=player,
+                signal_events=signal_events,
+                emit=emit,
+                trace=trace,
+            )
+            continue
+        if line in ("off", "pause", "stop"):
+            _set_measurement_enabled(
+                control,
+                enabled=False,
+                player=player,
+                signal_events=signal_events,
+                emit=emit,
+                trace=trace,
+            )
+            continue
+
+        _set_measurement_enabled(
+            control,
+            enabled=not control.is_enabled(),
+            player=player,
+            signal_events=signal_events,
+            emit=emit,
+            trace=trace,
+        )
+
+
 def _imu_loop_device(
     *,
     profile: DeviceProfile,
@@ -256,6 +382,7 @@ def _human_signal_loop(
     nod_axis: str,
     shake_axis: str,
     event_queue: queue.Queue,
+    control: MeasurementControl | None = None,
     debug: bool = False,
     status: StatusStore | None = None,
 ) -> None:
@@ -264,6 +391,15 @@ def _human_signal_loop(
     last_debug: bool | None = None
     while True:
         now = time.time()
+        if control is not None and not control.is_enabled():
+            paused = _paused_signal()
+            store.update(ts=now, signal=paused)
+            if status:
+                status.set_human_signal(text="停止中")
+            episode_fired = False
+            last_present = False
+            time.sleep(0.1)
+            continue
         imu_bundle = buffer.build_bundle(now=now, raw_window_sec=2.0, raw_max_points=24, stats_windows_sec=[1.0, 5.0])
         signal = detect_backchannel_signal(
             imu_bundle,
@@ -374,6 +510,7 @@ def _pick_demo_fallback_item(
 def _demo_backchannel_loop(
     signal_events: queue.Queue,
     *,
+    control: MeasurementControl | None,
     graph: object | None,
     items: list,
     audio_dir: Path,
@@ -397,6 +534,10 @@ def _demo_backchannel_loop(
     recent_texts: list[str] = []
 
     while not speaker.is_done():
+        if control is not None and not control.is_enabled():
+            _drain_signal_events(signal_events)
+            time.sleep(0.1)
+            continue
         try:
             ev = signal_events.get(timeout=0.1)
         except queue.Empty:
@@ -665,6 +806,8 @@ def run_demo_session(
         emit(f"3 軸 probe: {probe.reason}")
 
     imu_buffer = ImuBuffer(max_seconds=600.0)
+    stdin_toggle = script is None and sys.stdin.isatty()
+    measurement_control = MeasurementControl(enabled=(script is not None or not stdin_toggle))
     threading.Thread(
         target=_imu_loop_device,
         kwargs={
@@ -723,6 +866,7 @@ def run_demo_session(
             "nod_axis": nod_axis,
             "shake_axis": shake_axis,
             "event_queue": signal_events,
+            "control": measurement_control,
             "debug": debug_signal and (status is None),
             "status": status,
         },
@@ -748,6 +892,7 @@ def run_demo_session(
         target=_demo_backchannel_loop,
         args=(signal_events,),
         kwargs={
+            "control": measurement_control,
             "graph": graph,
             "items": items,
             "audio_dir": audio_dir,
@@ -768,11 +913,28 @@ def run_demo_session(
         name="demo-backchannel",
     ).start()
 
+    speaker.start()
     if script is None:
-        emit("センサだけで反応します。頷くか、首を振ってください。終了は Ctrl+C です。")
+        if stdin_toggle:
+            emit("準備できました。Enter で測定を開始します。再度 Enter で OFF、q と Enter で終了です。")
+            threading.Thread(
+                target=_sensor_only_control_loop,
+                kwargs={
+                    "control": measurement_control,
+                    "speaker": speaker,
+                    "player": player,
+                    "signal_events": signal_events,
+                    "emit": emit,
+                    "trace": trace,
+                },
+                daemon=True,
+                name="demo-sensor-toggle",
+            ).start()
+        else:
+            measurement_control.set_enabled(True)
+            emit("センサだけで反応します。頷くか、首を振ってください。終了は Ctrl+C です。")
     else:
         emit("デモを始めます。cue が出たら Enter で進めてください。")
-    speaker.start()
     try:
         speaker.wait()
     except KeyboardInterrupt:

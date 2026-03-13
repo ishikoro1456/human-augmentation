@@ -1,7 +1,7 @@
 import unittest
 
 from app.core.types import BackchannelItem
-from app.demo.session import _pick_demo_fallback_item
+from app.demo.session import MeasurementControl, _paused_signal, _pick_demo_fallback_item
 
 
 class DemoSessionTests(unittest.TestCase):
@@ -37,6 +37,21 @@ class DemoSessionTests(unittest.TestCase):
 
         self.assertIsNotNone(item)
         self.assertEqual(item.id, "09")
+
+    def test_measurement_control_toggles_state(self) -> None:
+        control = MeasurementControl(enabled=False)
+
+        self.assertFalse(control.is_enabled())
+        self.assertTrue(control.toggle())
+        self.assertTrue(control.is_enabled())
+        self.assertFalse(control.set_enabled(False))
+
+    def test_paused_signal_is_non_present(self) -> None:
+        signal = _paused_signal()
+
+        self.assertFalse(signal["present"])
+        self.assertEqual(signal["gesture_hint"], "other")
+        self.assertEqual(signal["reason"], "paused")
 
 
 if __name__ == "__main__":

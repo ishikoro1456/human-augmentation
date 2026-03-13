@@ -15,13 +15,10 @@
 - `data/demo/scripts/conference_demo_en.json`
 - `data/demo/script_audio/conference_demo_en/`
 
-音声を差し替えるときは、`catalog_en.tsv` の `id` と `directory` に合わせて mp3 を置きます。ファイル名は今の形式にそろえてください。たとえば `01_s1_n1_yes.mp3` のように置けば読み込まれます。
-
-macOS で英語音声を作り直すなら、`say` と `ffmpeg` が使えます。例です。
+音声を作り直すときは、OpenAI TTS を使います。`.env` に `OPENAI_API_KEY` を入れて、次を実行してください。
 
 ```bash
-say -v Samantha -o /tmp/yes.aiff "Yes."
-ffmpeg -y -i /tmp/yes.aiff data/demo/backchannel_en/positive/01_s1_n1_yes.mp3
+uv run python scripts/generate_demo_audio.py --overwrite
 ```
 
 ## プログラムの起動方法
@@ -43,6 +40,8 @@ bash scripts/demo-up.sh
 ```bash
 bash scripts/demo-up.sh demo-xiao-bno055
 ```
+
+起動したら、`Enter` で測定 ON、もう一度 `Enter` で測定 OFF、`q` と `Enter` で終了です。
 
 ポートを固定したいときは、環境変数で渡せます。
 

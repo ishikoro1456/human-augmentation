@@ -68,8 +68,13 @@ class AudioPlayer:
         self.play_music_blocking(path)
 
     def stop(self) -> None:
-        if self._ready:
+        if not self._ready:
+            return
+        with self._lock:
             pygame.mixer.music.stop()
+            channel = self._effect_channel
+            if channel:
+                channel.stop()
 
     def estimate_duration_s(self, path: Path) -> float | None:
         with self._lock:
