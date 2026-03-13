@@ -41,7 +41,7 @@ bash scripts/demo-up.sh
 bash scripts/demo-up.sh demo-xiao-bno055
 ```
 
-起動したら、`Enter` で測定 ON、もう一度 `Enter` で測定 OFF、`q` と `Enter` で終了です。
+起動したら、`Enter` で測定 ON/OFF、`q` で終了です。手動で鳴らすときは `1` から `7` が肯定系、`a` から `h` が否定系です。
 
 ポートを固定したいときは、環境変数で渡せます。
 

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import select
 import sys
+import termios
 import threading
 import time
+import tty
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict
@@ -30,6 +34,23 @@ from app.runtime.status import StatusStore
 from app.runtime.trace import TraceWriter
 
 from .script import DemoScript
+
+
+MANUAL_BACKCHANNEL_KEYS = (
+    ("1", "01"),
+    ("2", "02"),
+    ("3", "03"),
+    ("4", "04"),
+    ("5", "05"),
+    ("6", "06"),
+    ("7", "07"),
+    ("a", "08"),
+    ("s", "09"),
+    ("d", "10"),
+    ("f", "11"),
+    ("g", "12"),
+    ("h", "13"),
+)
 
 
 def _extract_agent_reason(result: Dict[str, object]) -> str:
@@ -233,6 +254,43 @@ def _paused_signal() -> Dict[str, object]:
     }
 
 
+def _manual_key_map(items: list[BackchannelItem], audio_dir: Path) -> Dict[str, tuple[BackchannelItem, Path]]:
+    items_by_id = {item.id: item for item in items}
+    mapping: Dict[str, tuple[BackchannelItem, Path]] = {}
+    for key, item_id in MANUAL_BACKCHANNEL_KEYS:
+        item = items_by_id.get(item_id)
+        if item is None:
+            continue
+        audio_path = find_audio_file(audio_dir, item)
+        if audio_path is None:
+            continue
+        mapping[key] = (item, audio_path)
+    return mapping
+
+
+def _manual_key_guide(mapping: Dict[str, tuple[BackchannelItem, Path]]) -> str:
+    positive: list[str] = []
+    negative: list[str] = []
+    for key, item_id in MANUAL_BACKCHANNEL_KEYS:
+        entry = mapping.get(key)
+        if entry is None:
+            continue
+        item, _ = entry
+        label = f"{key}:{item.text}"
+        if item.directory == "positive":
+            positive.append(label)
+        else:
+            negative.append(label)
+    parts = []
+    if positive:
+        parts.append("positive " + " ".join(positive))
+    if negative:
+        parts.append("negative " + " ".join(negative))
+    parts.append("Enter: ON/OFF")
+    parts.append("q: 終了")
+    return " | ".join(parts)
+
+
 def _drain_signal_events(signal_events: queue.Queue) -> None:
     while True:
         try:
@@ -265,68 +323,138 @@ def _set_measurement_enabled(
     return next_state
 
 
+def _play_selected_backchannel(
+    *,
+    player: AudioPlayer,
+    item: BackchannelItem,
+    audio_path: Path,
+    reason: str,
+    interrupt: bool,
+    status: StatusStore | None,
+    trace: TraceWriter | None,
+    debug_agent: bool = False,
+) -> bool:
+    restore_volume: float | None = None
+    if player.is_music_playing():
+        restore_volume = player.get_music_volume()
+        player.set_music_volume(0.35)
+    played = player.play_effect(audio_path, interrupt=interrupt)
+    if status:
+        status.set_backchannel_playback(path=audio_path, played=played)
+        status.log(f"{reason}: {item.id} {item.text}")
+    if trace:
+        trace.write(
+            {
+                "type": "demo_backchannel_play",
+                "reason": reason,
+                "selected_id": item.id,
+                "selected_text": item.text,
+                "audio_path": str(audio_path),
+                "played": bool(played),
+            }
+        )
+    if debug_agent and not status:
+        print(f"{reason}: {item.id} {item.text}")
+    if played:
+        while player.is_effect_playing():
+            time.sleep(0.02)
+    if restore_volume is not None:
+        player.set_music_volume(restore_volume)
+    return bool(played)
+
+
+class _RawTtyReader:
+    def __init__(self) -> None:
+        self._fd = sys.stdin.fileno()
+        self._old = None
+
+    def __enter__(self) -> "_RawTtyReader":
+        self._old = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._old is not None:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old)
+
+    def read_key(self, timeout_sec: float = 0.1) -> str:
+        ready, _, _ = select.select([self._fd], [], [], max(0.0, float(timeout_sec)))
+        if not ready:
+            return ""
+        raw = os.read(self._fd, 1)
+        if not raw:
+            return ""
+        if raw == b"\x03":
+            raise KeyboardInterrupt
+        try:
+            return raw.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
+
+
 def _sensor_only_control_loop(
     *,
     control: MeasurementControl,
     speaker: SensorOnlySpeaker,
     player: AudioPlayer,
     signal_events: queue.Queue,
+    manual_map: Dict[str, tuple[BackchannelItem, Path]],
     emit: Callable[[str], None],
     trace: TraceWriter | None,
+    status: StatusStore | None,
+    debug_agent: bool,
 ) -> None:
-    while not speaker.is_done():
-        try:
-            line = input().strip().lower()
-        except EOFError:
-            _set_measurement_enabled(
-                control,
-                enabled=True,
-                player=player,
-                signal_events=signal_events,
-                emit=emit,
-                trace=trace,
-            )
-            emit("標準入力が読めないので、測定を ON のまま続けます。")
-            return
-        except KeyboardInterrupt:
-            speaker.stop()
-            player.stop()
-            return
-
-        if line in ("q", "quit", "exit"):
-            speaker.stop()
-            player.stop()
-            emit("停止します。")
-            return
-        if line in ("on", "start"):
-            _set_measurement_enabled(
-                control,
-                enabled=True,
-                player=player,
-                signal_events=signal_events,
-                emit=emit,
-                trace=trace,
-            )
-            continue
-        if line in ("off", "pause", "stop"):
-            _set_measurement_enabled(
-                control,
-                enabled=False,
-                player=player,
-                signal_events=signal_events,
-                emit=emit,
-                trace=trace,
-            )
-            continue
-
+    try:
+        with _RawTtyReader() as reader:
+            while not speaker.is_done():
+                key = reader.read_key(timeout_sec=0.1)
+                if not key:
+                    continue
+                if key in ("\r", "\n"):
+                    _set_measurement_enabled(
+                        control,
+                        enabled=not control.is_enabled(),
+                        player=player,
+                        signal_events=signal_events,
+                        emit=emit,
+                        trace=trace,
+                    )
+                    continue
+                norm = key.lower()
+                if norm == "q":
+                    speaker.stop()
+                    player.stop()
+                    emit("停止します。")
+                    return
+                entry = manual_map.get(norm)
+                if entry is None:
+                    continue
+                item, audio_path = entry
+                _play_selected_backchannel(
+                    player=player,
+                    item=item,
+                    audio_path=audio_path,
+                    reason=f"manual key {norm}",
+                    interrupt=True,
+                    status=status,
+                    trace=trace,
+                    debug_agent=debug_agent,
+                )
+    except (EOFError, termios.error):
         _set_measurement_enabled(
             control,
-            enabled=not control.is_enabled(),
+            enabled=True,
             player=player,
             signal_events=signal_events,
             emit=emit,
             trace=trace,
         )
+        emit("標準入力が読めないので、測定を ON のまま続けます。")
+        return
+    except KeyboardInterrupt:
+        speaker.stop()
+        player.stop()
+        return
 
 
 def _imu_loop_device(
@@ -676,24 +804,16 @@ def _demo_backchannel_loop(
                     latency_ms=latency_ms,
                     ts=time.time(),
                 )
-            restore_volume: float | None = None
-            if player.is_music_playing():
-                restore_volume = player.get_music_volume()
-                player.set_music_volume(0.35)
-            played = player.play_effect(audio_path)
-            if status:
-                status.set_backchannel_playback(path=audio_path, played=played)
-            if trace:
-                trace.write(
-                    {
-                        "type": "demo_backchannel_play",
-                        "gesture_hint": hint,
-                        "selected_id": selected_item.id,
-                        "selected_text": selected_item.text,
-                        "audio_path": str(audio_path),
-                        "played": bool(played),
-                    }
-                )
+            played = _play_selected_backchannel(
+                player=player,
+                item=selected_item,
+                audio_path=audio_path,
+                reason=f"agent {hint}",
+                interrupt=False,
+                status=status,
+                trace=trace,
+                debug_agent=debug_agent,
+            )
             if played:
                 last_backchannel_play = time.time()
                 last_backchannel_text = selected_item.text
@@ -703,12 +823,6 @@ def _demo_backchannel_loop(
                     recent_ids = recent_ids[-12:]
                 if len(recent_texts) > 12:
                     recent_texts = recent_texts[-12:]
-                while player.is_effect_playing() and not speaker.is_done():
-                    time.sleep(0.02)
-            if restore_volume is not None:
-                player.set_music_volume(restore_volume)
-            if debug_agent and not status:
-                print(f"選択: {selected_item.id} {selected_item.text}")
         except Exception as exc:
             if status:
                 status.set_agent_decision(
@@ -875,6 +989,7 @@ def run_demo_session(
     ).start()
 
     player = AudioPlayer()
+    manual_map = _manual_key_map(items, audio_dir)
     if script is None or script_path is None:
         speaker = SensorOnlySpeaker(status=status, trace=trace)
     else:
@@ -916,7 +1031,8 @@ def run_demo_session(
     speaker.start()
     if script is None:
         if stdin_toggle:
-            emit("準備できました。Enter で測定を開始します。再度 Enter で OFF、q と Enter で終了です。")
+            emit("準備できました。Enter で測定 ON/OFF、q で終了です。")
+            emit(_manual_key_guide(manual_map))
             threading.Thread(
                 target=_sensor_only_control_loop,
                 kwargs={
@@ -924,8 +1040,11 @@ def run_demo_session(
                     "speaker": speaker,
                     "player": player,
                     "signal_events": signal_events,
+                    "manual_map": manual_map,
                     "emit": emit,
                     "trace": trace,
+                    "status": status,
+                    "debug_agent": debug_agent,
                 },
                 daemon=True,
                 name="demo-sensor-toggle",
