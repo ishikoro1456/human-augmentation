@@ -640,7 +640,7 @@ def run_session(
         while True:
             time.sleep(0.2)
     transcript_events: queue.Queue = queue.Queue()
-    cache_dir = tts_cache_dir or Path("data/tts_cache")
+    cache_dir = tts_cache_dir or Path("data/runtime/tts_cache")
     speaker = TranscriptSpeaker(
         timeline=timeline,
         client=client,

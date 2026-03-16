@@ -372,7 +372,7 @@ def run_listener_session(
     stt_model: str = "gpt-4o-transcribe",
     stt_language: str = "ja",
     stt_prompt: str = "",
-    stt_segments_dir: Path = Path("data/stt_segments_listener"),
+    stt_segments_dir: Path = Path("data/runtime/stt_segments_listener"),
     vad_frame_ms: int = 20,
     vad_pre_roll_ms: int = 200,
     vad_silence_end_ms: int = 500,

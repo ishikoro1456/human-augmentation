@@ -53,7 +53,7 @@ def main() -> None:
     parser.add_argument("--stt-model", default="gpt-4o-transcribe")
     parser.add_argument("--stt-language", default="ja")
     parser.add_argument("--stt-prompt", default="")
-    parser.add_argument("--stt-segments-dir", default="data/stt_segments_listener")
+    parser.add_argument("--stt-segments-dir", default="data/runtime/stt_segments_listener")
 
     parser.add_argument("--vad-frame-ms", type=int, default=20)
     parser.add_argument("--vad-pre-roll-ms", type=int, default=200)

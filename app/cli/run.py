@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("--thread-id", default="local-session")
     parser.add_argument(
         "--transcript",
-        default="transcribe.txt",
+        default="data/transcripts/transcribe.txt",
         help="Path to transcript. Supports [mm:ss] lines or plain text (1 line = 1 chunk).",
     )
     parser.add_argument(
@@ -60,7 +60,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--tts-cache-dir",
-        default="data/tts_cache",
+        default="data/runtime/tts_cache",
         help="Directory to cache generated TTS audio",
     )
     parser.add_argument(
