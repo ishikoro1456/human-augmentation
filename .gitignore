@@ -25,12 +25,20 @@ dist/
 # Editor
 .vscode/
 .idea/
+.cursor/
 
-
-data/tts_cache/
-data/stt_segments_listener/
-data/logs/
+# Runtime / generated
+data/runtime/**
+!data/runtime/
+!data/runtime/README.md
+data/questionnaire/derived/
 data/results/
+paper_materials/video/generated/
+archive/reference/.venv/
+archive/reference/SciencePlots/.git/
+archive/reference/**/__pycache__/
+archive/reference/**/*.pyc
+**/__pycache__/
 
 # UV
 .uv/
