@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}評価完了 — 相槌評価{% endblock %}
+{% block body %}
+<main class="container" style="max-width:600px; padding-top:3rem; text-align:center;">
+  <h1>✓ 評価が完了しました</h1>
+
+  <div class="stats-card">
+    <p class="stats-main">{{ stats.count }} 件 / {{ session.decisions | length }} 件を評価</p>
+
+    {% if stats.distribution %}
+    <h3>評価の分布</h3>
+    <div class="dist-chart">
+      {% for score in range(1, 8) %}
+      {% set count = stats.distribution.get(score, 0) %}
+      {% set pct = (count * 100 // stats.count) if stats.count else 0 %}
+      <div class="dist-row">
+        <span class="dist-label">{{ score }}</span>
+        <div class="dist-bar-wrap">
+          <div class="dist-bar" style="width:{{ pct }}%;"></div>
+        </div>
+        <span class="dist-count">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <p class="stats-avg">
+      平均スコア:
+      {% set total = namespace(v=0) %}
+      {% for s, c in stats.distribution.items() %}{% set total.v = total.v + s * c %}{% endfor %}
+      <strong>{{ "%.2f"|format(total.v / stats.count) }}</strong> / 7
+    </p>
+
+    {% if stats.avg_time_ms %}
+    <p class="stats-time">平均評価時間: <strong>{{ stats.avg_time_ms // 1000 }}秒 / 判断</strong></p>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div style="display:flex; gap:1rem; justify-content:center; margin-top:2rem; flex-wrap:wrap;">
+    <a href="/sessions" role="button" class="secondary">← セッション一覧に戻る</a>
+    <a href="/evaluate/{{ session.experiment_id }}/0" role="button" class="secondary">最初から見直す</a>
+    <a href="/export/csv" role="button">CSV ダウンロード</a>
+  </div>
+</main>
+{% endblock %}

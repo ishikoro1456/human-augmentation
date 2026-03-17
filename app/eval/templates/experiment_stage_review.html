@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{{ stage.name }} の評価{% endblock %}
+{% block body %}
+<header class="eval-header">
+  <div class="eval-header-inner">
+    <a href="/experiment" class="back-link">← 台本一覧</a>
+    <div class="progress-area">
+      <span class="progress-label">Stage {{ stage_index + 1 }} / {{ stages | length }}</span>
+      <progress value="{{ stage_index + 1 }}" max="{{ stages | length }}"></progress>
+    </div>
+    <span class="session-id">{{ stage.name }}</span>
+  </div>
+</header>
+
+<main class="container" style="max-width:980px; padding-top:calc(var(--header-h) + 1rem);">
+  <h2 style="margin-top:0;">{{ stage.name }} の事後評価</h2>
+  <p class="muted">{{ stage.description }}</p>
+
+  <form method="post" action="/experiment/run/{{ session_id }}/stage/{{ stage_index }}/review" id="stage-review-form">
+    <input type="hidden" name="evaluator_id" value="{{ evaluator_id }}">
+
+    <article>
+      <header><strong>共通指標（1=低い, 7=高い）</strong></header>
+      {% for key, label in common_labels.items() %}
+      <fieldset class="likert-fieldset" style="margin-bottom:0.8rem;">
+        <legend>{{ label }}</legend>
+        <div class="likert-row">
+          <span class="likert-anchor">低い</span>
+          <div class="likert-options">
+            {% for v in [1,2,3,4,5,6,7] %}
+            <label class="likert-label">
+              <input type="radio" name="{{ key }}" value="{{ v }}"
+                {% if existing_eval_map.get(key) == v %}checked{% endif %}
+                required>
+              <span class="likert-num">{{ v }}</span>
+            </label>
+            {% endfor %}
+          </div>
+          <span class="likert-anchor">高い</span>
+        </div>
+      </fieldset>
+      {% endfor %}
+    </article>
+
+    <article>
+      <header><strong>段階固有指標（1=低い, 7=高い）</strong></header>
+      {% for key, label in specific_labels.items() %}
+      <fieldset class="likert-fieldset" style="margin-bottom:0.8rem;">
+        <legend>{{ label }}</legend>
+        <div class="likert-row">
+          <span class="likert-anchor">低い</span>
+          <div class="likert-options">
+            {% for v in [1,2,3,4,5,6,7] %}
+            <label class="likert-label">
+              <input type="radio" name="{{ key }}" value="{{ v }}"
+                {% if existing_eval_map.get(key) == v %}checked{% endif %}
+                required>
+              <span class="likert-num">{{ v }}</span>
+            </label>
+            {% endfor %}
+          </div>
+          <span class="likert-anchor">高い</span>
+        </div>
+      </fieldset>
+      {% endfor %}
+    </article>
+
+    <article>
+      <header><strong>気になった応答の指摘（任意）</strong></header>
+      {% if decisions %}
+      <div style="display:flex; flex-direction:column; gap:0.8rem;">
+        {% for d in decisions %}
+        {% set ann = annotations_map.get(d.call_id, {}) %}
+        <div class="decision-detail" style="padding:0.8rem;">
+          <div style="display:flex; gap:0.7rem; flex-wrap:wrap; align-items:center;">
+            <strong>#{{ loop.index }}</strong>
+            <span>{{ gesture_labels.get(d.gesture_hint, ('?','?'))[1] }} {{ gesture_labels.get(d.gesture_hint, ('?','?'))[0] }}</span>
+            <span>→ 「{{ d.selected_text }}」</span>
+            <small>強度 {{ d.intensity_1to5 }}/5</small>
+            <small>conf={{ '%.2f'|format(d.signal_confidence) }}</small>
+          </div>
+          <div class="issues-grid" style="margin-top:0.6rem;">
+            {% for value, label in issue_options %}
+            <label class="issue-label">
+              <input type="checkbox" name="ann_{{ d.call_id }}_issues" value="{{ value }}"
+                {% if value in ann.get('issue_tags', []) %}checked{% endif %}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+          <textarea
+            name="ann_{{ d.call_id }}_comment"
+            rows="2"
+            placeholder="この応答について気づいた点（任意）"
+            style="margin-top:0.6rem;"
+          >{{ ann.get('comment', '') }}</textarea>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">この段階では応答がありませんでした。</p>
+      {% endif %}
+    </article>
+
+    <article>
+      <header><strong>段階全体コメント（任意）</strong></header>
+      <textarea name="overall_comment" rows="3" placeholder="全体を通して感じたこと">{{ existing_eval_map.get('overall_comment', '') }}</textarea>
+    </article>
+
+    <div style="display:flex; justify-content:space-between; gap:1rem; margin-top:1rem;">
+      <a href="/experiment/run/{{ session_id }}" role="button" class="secondary">実験画面に戻る</a>
+      <button type="submit">保存して次へ</button>
+    </div>
+  </form>
+</main>
+{% endblock %}

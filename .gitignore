@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# Build
+build/
+dist/
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+.cursor/
+
+# Runtime / generated
+data/runtime/**
+!data/runtime/
+!data/runtime/README.md
+data/questionnaire/derived/
+data/results/
+paper_materials/video/generated/
+archive/reference/.venv/
+archive/reference/SciencePlots/.git/
+archive/reference/**/__pycache__/
+archive/reference/**/*.pyc
+**/__pycache__/
+
+# UV
+.uv/
+
+# AGENTS
+AGENTS.md
+
+# Env
+.env
+inst
+.claude/skills/
+.skills/

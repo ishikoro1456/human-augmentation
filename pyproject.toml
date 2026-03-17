@@ -1,0 +1,27 @@
+[project]
+name = "human-augmentation"
+version = "0.1.0"
+description = "Local backchannel app prototype"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "google-cloud-texttospeech",
+  "langgraph",
+  "openai",
+  "pygame",
+  "pyserial",
+  "python-dotenv",
+  "rich",
+]
+
+[project.optional-dependencies]
+analysis = [
+    "matplotlib>=3.10.8",
+    "pandas>=2.3.3",
+]
+eval = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]

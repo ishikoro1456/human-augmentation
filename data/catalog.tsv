@@ -1,0 +1,11 @@
+id	directory	strength	nod	text
+01	positive	1	1	はい
+03	positive	1	1	うん、うん
+04	positive	3	3	そうですね
+05	positive	3	3	たしかに
+06	positive	3	3	わかります
+07	negative	1	1	んー？
+09	negative	1	1	そうかな
+10	negative	3	3	ちがうかな
+11	negative	3	3	ちょっと違うかも
+12	negative	5	5	わからないです

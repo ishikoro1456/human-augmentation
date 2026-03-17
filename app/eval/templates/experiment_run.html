@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{{ snap.script_title }} — 4段階実験{% endblock %}
+{% block body %}
+
+<header class="eval-header">
+  <div class="eval-header-inner">
+    <a href="/experiment" class="back-link">← 台本一覧</a>
+    <div class="progress-area">
+      <span class="progress-label">Stage {{ snap.stage_index + 1 }} / {{ snap.stage_total }}</span>
+      <progress value="{{ snap.current_idx + 1 if snap.current_idx >= 0 else 0 }}" max="{{ snap.total }}"></progress>
+      <span class="progress-pct">{{ snap.current_idx + 1 if snap.current_idx >= 0 else 0 }} / {{ snap.total }}</span>
+    </div>
+    <span class="session-id">{{ snap.stage_name }}</span>
+  </div>
+</header>
+
+<div id="gen-banner" {% if snap.tts_ready %}style="display:none"{% endif %}
+     hx-get="/experiment/run/{{ snap.session_id }}/poll"
+     hx-trigger="every 1s"
+     hx-target="#gen-banner"
+     hx-swap="outerHTML">
+  <div style="background:var(--pico-primary); color:white; text-align:center; padding:0.5rem; font-size:0.9rem;">
+    音声を準備中です...
+  </div>
+</div>
+
+<div class="eval-layout">
+  <aside class="timeline-panel" id="script-panel">
+    <h3 class="panel-title">{{ snap.stage_name }}</h3>
+    <p class="muted" style="margin-top:-0.4rem;">{{ snap.stage_description }}</p>
+
+    {% for s in sentences %}
+    <div class="script-line {% if loop.index0 == snap.current_idx %}script-current{% elif loop.index0 < snap.current_idx %}script-done{% endif %}"
+         id="sl-{{ loop.index0 }}">
+      <span class="sl-num">{{ loop.index }}</span>
+      <span class="sl-text">{{ s.text }}</span>
+    </div>
+    {% endfor %}
+  </aside>
+
+  <section class="detail-panel" style="display:flex; flex-direction:column; gap:1rem;">
+    <div class="exp-controls">
+      <button
+        id="btn-advance"
+        hx-post="/experiment/run/{{ snap.session_id }}/advance"
+        hx-swap="none"
+        {% if snap.state in ["done", "stage_review"] or not snap.tts_ready %}disabled{% endif %}
+        class="primary-btn advance-btn"
+      >
+        {% if snap.current_idx < 0 %}▶ 開始{% elif snap.current_idx + 1 >= snap.total %}段階終了 → 評価{% else %}次の発言 →{% endif %}
+      </button>
+
+      <div class="gesture-btns">
+        <span class="gesture-hint-label">ジェスチャー入力:</span>
+        <button
+          class="gesture-btn nod-btn"
+          hx-post="/experiment/run/{{ snap.session_id }}/gesture/nod"
+          hx-swap="none"
+          {% if snap.state != "running" %}disabled{% endif %}
+        >↓↑ うなずき</button>
+        <button
+          class="gesture-btn shake-btn"
+          hx-post="/experiment/run/{{ snap.session_id }}/gesture/shake"
+          hx-swap="none"
+          {% if snap.state != "running" %}disabled{% endif %}
+        >←→ 首振り</button>
+      </div>
+    </div>
+
+    <div id="rt-panel"
+         hx-get="/experiment/run/{{ snap.session_id }}/poll"
+         hx-trigger="every 500ms"
+         hx-swap="outerHTML">
+      {% include "partials/experiment_rt.html" %}
+    </div>
+  </section>
+</div>
+
+<script>
+function handleStateTransition() {
+  const panel = document.getElementById('rt-panel');
+  if (!panel) return;
+  const nextUrl = panel.getAttribute('data-next-url');
+  if (nextUrl) {
+    window.location.href = nextUrl;
+  }
+}
+
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target && e.detail.target.id === 'rt-panel') {
+    handleStateTransition();
+    const cur = document.querySelector('.script-current');
+    if (cur) cur.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+});
+
+document.addEventListener('keydown', function (e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === ' ' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const btn = document.getElementById('btn-advance');
+    if (btn && !btn.disabled) btn.click();
+  }
+  if (e.key === 'n' || e.key === 'N') {
+    e.preventDefault();
+    const btn = document.querySelector('.nod-btn');
+    if (btn && !btn.disabled) btn.click();
+  }
+  if (e.key === 's' || e.key === 'S') {
+    e.preventDefault();
+    const btn = document.querySelector('.shake-btn');
+    if (btn && !btn.disabled) btn.click();
+  }
+});
+</script>
+{% endblock %}

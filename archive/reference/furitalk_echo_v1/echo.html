@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Realtime Echo (Web Audio)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; line-height: 1.5; }
+    .row { margin: 12px 0; }
+    label { display: inline-block; width: 140px; }
+    input[type="range"] { width: 320px; }
+    button { padding: 10px 14px; margin-right: 8px; }
+    .warn { color: #b00; font-weight: 600; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Realtime Echo (Web Audio API)</h1>
+  <p class="warn">ハウリング防止のため、まずはヘッドホン推奨。</p>
+
+  <div class="row">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+
+  <div class="row">
+    <label>Delay (ms)</label>
+    <input id="delayMs" type="range" min="0" max="800" value="180" step="1">
+    <span id="delayVal">180</span>
+  </div>
+
+  <div class="row">
+    <label>Feedback</label>
+    <input id="feedback" type="range" min="0" max="0.95" value="0.35" step="0.01">
+    <span id="feedbackVal">0.35</span>
+  </div>
+
+  <div class="row">
+    <label>Wet (echo)</label>
+    <input id="wet" type="range" min="0" max="1" value="0.45" step="0.01">
+    <span id="wetVal">0.45</span>
+  </div>
+
+  <div class="row">
+    <label>Dry (voice)</label>
+    <input id="dry" type="range" min="0" max="1" value="1" step="0.01">
+    <span id="dryVal">1.00</span>
+  </div>
+
+  <p>
+    仕組み：<code>mic → (dry) → out</code> と
+    <code>mic → delay → feedback → (wet) → out</code> をミックスしています。
+  </p>
+
+  <script>
+    // UI
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn  = document.getElementById("stopBtn");
+
+    const delayMs = document.getElementById("delayMs");
+    const feedback = document.getElementById("feedback");
+    const wet = document.getElementById("wet");
+    const dry = document.getElementById("dry");
+
+    const delayVal = document.getElementById("delayVal");
+    const feedbackVal = document.getElementById("feedbackVal");
+    const wetVal = document.getElementById("wetVal");
+    const dryVal = document.getElementById("dryVal");
+
+    function syncLabels() {
+      delayVal.textContent = delayMs.value;
+      feedbackVal.textContent = Number(feedback.value).toFixed(2);
+      wetVal.textContent = Number(wet.value).toFixed(2);
+      dryVal.textContent = Number(dry.value).toFixed(2);
+    }
+    [delayMs, feedback, wet, dry].forEach(el => el.addEventListener("input", syncLabels));
+    syncLabels();
+
+    // Audio graph nodes
+    let audioCtx = null;
+    let stream = null;
+
+    let micSource = null;
+    let delayNode = null;
+    let feedbackGain = null;
+    let wetGain = null;
+    let dryGain = null;
+
+    async function start() {
+      // 1) Create AudioContext on user gesture
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+        latencyHint: "interactive"
+      });
+
+      // 2) Get mic
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false, // エフェクト用途なので、基本OFF推奨（好みでtrueでもOK）
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+
+      micSource = audioCtx.createMediaStreamSource(stream);
+
+      // 3) Create nodes
+      delayNode = audioCtx.createDelay(2.0); // max delay seconds
+      feedbackGain = audioCtx.createGain();
+      wetGain = audioCtx.createGain();
+      dryGain = audioCtx.createGain();
+
+      // (optional) 安全のため出力手前にリミッタっぽくする（軽いコンプ）
+      const compressor = audioCtx.createDynamicsCompressor();
+      compressor.threshold.value = -18;
+      compressor.knee.value = 20;
+      compressor.ratio.value = 6;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.25;
+
+      // 4) Wiring:
+      // Dry path: mic -> dryGain -> (compressor) -> destination
+      micSource.connect(dryGain);
+
+      // Wet path: mic -> delay -> wetGain -> (compressor) -> destination
+      micSource.connect(delayNode);
+      delayNode.connect(wetGain);
+
+      // Feedback loop: delay -> feedbackGain -> delay
+      delayNode.connect(feedbackGain);
+      feedbackGain.connect(delayNode);
+
+      // Mix to output
+      dryGain.connect(compressor);
+      wetGain.connect(compressor);
+      compressor.connect(audioCtx.destination);
+
+      // 5) Apply initial params
+      applyParams();
+
+      // 初期ウェットゲインを0に設定してエコーを無効にする
+      wetGain.gain.value = 0;
+
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      // WebSocket connection
+      const socket = new WebSocket("ws://localhost:8765");
+
+      socket.onopen = (event) => {
+        console.log("WebSocket connected!");
+        // 初期状態でエコーはオフ
+        wetGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.01);
+      };
+
+      socket.onmessage = (event) => {
+        if (event.data === "start_echo") {
+          console.log("Starting echo...");
+          // エコー開始時はwetの値をUIからの値に戻す
+          wetGain.gain.setTargetAtTime(Number(wet.value), audioCtx.currentTime, 0.01);
+        } else if (event.data === "stop_echo") {
+          console.log("Stopping echo...");
+          // エコー停止時はwetの値を0にする
+          wetGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.01);
+        }
+      };
+
+      socket.onclose = (event) => {
+        console.log("WebSocket disconnected.");
+      };
+
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error);
+      };
+    }
+
+    function applyParams() {
+      if (!audioCtx) return;
+
+      const ms = Number(delayMs.value);
+      const delaySeconds = ms / 1000;
+
+      // パラメータの変更は click ノイズを避けるため軽くスムージング
+      const t = audioCtx.currentTime;
+      delayNode.delayTime.setTargetAtTime(delaySeconds, t, 0.01);
+
+      feedbackGain.gain.setTargetAtTime(Number(feedback.value), t, 0.01);
+      dryGain.gain.setTargetAtTime(Number(dry.value), t, 0.01);
+    }
+
+    function stop() {
+      try {
+        if (stream) stream.getTracks().forEach(tr => tr.stop());
+      } catch (_) {}
+
+      try {
+        if (audioCtx) audioCtx.close();
+      } catch (_) {}
+
+      audioCtx = null;
+      stream = null;
+      micSource = delayNode = feedbackGain = wetGain = dryGain = null;
+
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    // Hook UI
+    startBtn.addEventListener("click", async () => {
+      try {
+        await start();
+      } catch (e) {
+        console.error(e);
+        alert("マイク取得に失敗しました。HTTPS/localhostで開いているか、マイク許可があるか確認してください。");
+        stop();
+      }
+    });
+
+    stopBtn.addEventListener("click", stop);
+
+    [delayMs, feedback, wet, dry].forEach(el => {
+      el.addEventListener("input", applyParams);
+    });
+  </script>
+</body>
+</html>

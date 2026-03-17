@@ -1,0 +1,13 @@
+{
+  "id": "gesture_probe_silent_en",
+  "title": "Gesture Probe Silent Script",
+  "language": "en",
+  "audio_dir": "../script_audio/gesture_probe_silent_en",
+  "segments": [
+    {
+      "kind": "speech",
+      "text": "Silent probe for listener gesture testing.",
+      "audio": "001_silence_30s.mp3"
+    }
+  ]
+}

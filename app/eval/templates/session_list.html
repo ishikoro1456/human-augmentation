@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}セッション一覧 — 相槌評価{% endblock %}
+{% block body %}
+<main class="container" style="max-width:800px; padding-top:2rem;">
+  <h1>相槌選択の評価実験</h1>
+  <p class="muted">エージェントが選んだ相槌が、あなたの意図と合っていたかどうかを評価します。</p>
+  <p><a href="/experiment" role="button" class="secondary" style="font-size:0.9rem;">▶ リアルタイム実験モード（台本TTS再生）</a></p>
+
+  <section class="evaluator-section">
+    <form method="post" action="/sessions">
+      <fieldset>
+        <legend>参加者ID</legend>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          <input
+            type="text"
+            name="evaluator_id"
+            value="{{ evaluator_id }}"
+            placeholder="例: P01"
+            required
+            style="max-width:200px; margin-bottom:0;"
+          >
+          <button type="submit" class="secondary" style="margin-bottom:0;">設定</button>
+        </div>
+        {% if evaluator_id %}
+        <small>現在の参加者ID: <strong>{{ evaluator_id }}</strong></small>
+        {% endif %}
+      </fieldset>
+    </form>
+  </section>
+
+  {% if not evaluator_id %}
+  <p><em>参加者IDを設定してからセッションを選択してください。</em></p>
+  {% else %}
+
+  <section>
+    <h2>セッション一覧</h2>
+    {% if sessions %}
+    <figure>
+      <table>
+        <thead>
+          <tr>
+            <th>日時</th>
+            <th>判断数</th>
+            <th>評価済み</th>
+            <th>進捗</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sessions %}
+          <tr>
+            <td>{{ s.date_str }}</td>
+            <td>{{ s.total }}</td>
+            <td>{{ s.evaluated }} / {{ s.total }}</td>
+            <td style="min-width:120px;">
+              <progress value="{{ s.evaluated }}" max="{{ s.total }}" style="width:100%; margin:0;"></progress>
+            </td>
+            <td>
+              {% if s.evaluated == s.total and s.total > 0 %}
+              <a href="/evaluate/{{ s.experiment_id }}/complete" role="button" class="secondary" style="padding:0.3rem 0.8rem; font-size:0.85rem;">完了 ✓</a>
+              {% elif s.evaluated > 0 %}
+              <a href="/evaluate/{{ s.experiment_id }}/{{ s.evaluated }}" role="button" style="padding:0.3rem 0.8rem; font-size:0.85rem;">続きから</a>
+              {% else %}
+              <a href="/evaluate/{{ s.experiment_id }}/0" role="button" style="padding:0.3rem 0.8rem; font-size:0.85rem;">開始</a>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </figure>
+    {% else %}
+    <p>評価可能なセッションがありません。</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>データエクスポート</h2>
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <a href="/export/csv" role="button" class="secondary">CSV ダウンロード</a>
+      <a href="/export/stage-csv" role="button" class="secondary">段階CSV</a>
+      <a href="/export/annotations-csv" role="button" class="secondary">指摘CSV</a>
+      <a href="/export/json" role="button" class="secondary">JSON ダウンロード</a>
+    </div>
+  </section>
+
+  {% endif %}
+</main>
+{% endblock %}

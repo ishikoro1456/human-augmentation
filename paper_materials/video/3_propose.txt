@@ -1,0 +1,1 @@
+We propose a system that uses IMU-equipped glasses to detect nods and head shakes. It then automatically plays a verbal response to the speaker.

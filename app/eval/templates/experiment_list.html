@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}実験台本一覧 — 相槌実験{% endblock %}
+{% block body %}
+<main class="container" style="max-width:760px; padding-top:2rem;">
+  <h1>4段階 IMU 相槌実験</h1>
+  <p class="muted">同一台本を4段階で実施します。各段階終了後にアンケートへ進みます。</p>
+
+  <article style="margin-bottom:1.5rem;">
+    <header><strong>実験段階</strong></header>
+    <ol style="margin:0.6rem 0 0;">
+      {% for st in stages %}
+      <li><strong>{{ st.name }}</strong> - {{ st.description }}</li>
+      {% endfor %}
+    </ol>
+  </article>
+
+  {% if not evaluator_id %}
+  <p><em>参加者IDが未設定です。<a href="/sessions">こちら</a>で設定できます。</em></p>
+  {% endif %}
+
+  {% for script in scripts %}
+  <article style="margin-bottom:1.5rem;">
+    <header><strong>{{ script.title }}</strong></header>
+    <p style="margin:0.3rem 0 0.8rem; font-size:0.9rem; color:var(--pico-muted-color);">
+      {{ script.description }}
+    </p>
+    <p style="font-size:0.85rem;">{{ script.sentences | length }} 文 x 4段階</p>
+    <form method="post" action="/experiment/{{ script.id }}/create">
+      <input type="hidden" name="protocol" value="imu_4stage_v1">
+      <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <input
+          type="text"
+          name="imu_port"
+          placeholder="IMUポート（例: /dev/cu.usbserial-310）"
+          style="flex:1; min-width:220px; margin:0; font-size:0.85rem;"
+        >
+        <button type="submit" style="margin:0;">セッション開始</button>
+      </div>
+      <small style="color:var(--pico-muted-color);">空欄ならモックモード（ボタンでジェスチャー入力）</small>
+    </form>
+  </article>
+  {% endfor %}
+
+  <hr>
+  <p><a href="/sessions">← 既存の事後評価モードに戻る</a></p>
+</main>
+{% endblock %}

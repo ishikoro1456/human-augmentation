@@ -1,0 +1,6 @@
+archive/
+data/runtime/
+data/questionnaire/derived/
+paper_materials/video/generated/
+**/__pycache__/
+.venv/
