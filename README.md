@@ -1,7 +1,5 @@
 # Human Augmentation
 
-この repo は、聞き手の頭部動作を IMU で取り、英語の相槌音声を返すデモと、評価用の実験コードをまとめたものです。
-
 まず見る文書は次です。
 
 - `docs/repository_guide.md`
@@ -17,7 +15,7 @@
 uv sync
 ```
 
-学会デモの入口はこれです。台本なしの sensor-only モードで、英語相槌を返します。
+台本なしの sensor-only モードで、英語相槌を返します。
 
 ```bash
 bash scripts/demo-up.sh
@@ -37,7 +35,7 @@ uv run python app/cli/run.py --help
 
 ## 学会デモの最短手順
 
-標準のデモ資産は `data/demo/` にあります。よく使うのは次です。
+標準のAssetは `data/demo/` にあります。よく使うのは次です。
 
 - `data/demo/catalog_en.tsv`
 - `data/demo/backchannel_en/`
